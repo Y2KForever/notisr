@@ -1,0 +1,63 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Globals:
+  Function:
+    Runtime: provided.al2023
+    Handler: bootstrap
+    MemorySize: 1024
+    Timeout: 30
+    Architectures:
+      - arm64
+
+Parameters:
+  StreamerTableName:
+    Type: String
+    Description: DynamoDB table name for storing streamer state
+  TwitchSecretArn:
+    Type: String
+    Description: ARN of the SecretsManager secret
+
+Resources:
+  TwitchWebhookFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./target/lambda/notifir-webhook-handler
+      Environment:
+        Variables:
+          STREAMER_TABLE: !Ref StreamerTableName
+          SECRET_ARN: !Ref TwitchSecretArn
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${StreamerTableName}
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+              Resource: !Ref TwitchSecretArn
+      Events:
+        WebhookApi:
+          Type: Api
+          Properties:
+            Path: /register
+            Method: post
+
+  StreamerTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Ref StreamerTableName
+      AttributeDefinitions:
+        - AttributeName: broadcaster_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: broadcaster_id
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+
+Outputs:
+  WebhookApiUrl:
+    Description: "Invoke URL for your webhook endpoint"
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/register"
