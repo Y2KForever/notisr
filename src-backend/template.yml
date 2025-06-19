@@ -2,6 +2,8 @@ AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 
 Globals:
+  Api:
+    OpenApiVersion: 3.0.1
   Function:
     Runtime: provided.al2023
     Handler: bootstrap
@@ -17,12 +19,63 @@ Parameters:
   TwitchSecretArn:
     Type: String
     Description: ARN of the SecretsManager secret
+  CallbackUrl:
+    Type: String
+    Description: URL for webhook callback
+  SubscriptionUrl:
+    Type: String
+    Description: URL for Twitch Subscription endpoint
+    Default: https://api.twitch.tv/helix/eventsub/subscriptions
+  TokenUrl:
+    Type: String
+    Description: URL for Twitch Authorization endpoint
+    Default: https://id.twitch.tv/oauth2/token
 
 Resources:
-  TwitchWebhookFunction:
+  NotisrApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: Notisr
+      StageName: prod
+
+  WebhookRegisterFunction:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: ./target/lambda/notifir-webhook-handler
+      CodeUri: ./target/lambda/webhook-register
+      Environment:
+        Variables:
+          STREAMER_TABLE: !Ref StreamerTableName
+          SECRET_ARN: !Ref TwitchSecretArn
+          CALLBACK_URL: !Ref CallbackUrl
+          SUBSCRIPTION_URL: !Ref SubscriptionUrl
+          TOKEN_URL: !Ref TokenUrl
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:PutRequest
+                - dynamodb:WriteRequest
+                - dynamodb:BatchGetItem
+                - dynamodb:BatchWriteItem
+              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${StreamerTableName}
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+              Resource: !Ref TwitchSecretArn
+      Events:
+        WebhookRegisterEvent:
+          Type: Api
+          Properties:
+            Path: /register
+            Method: post
+            RestApiId:
+              Ref: NotisrApi
+
+  WebhookHandlerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./target/lambda/webhook-handler
       Environment:
         Variables:
           STREAMER_TABLE: !Ref StreamerTableName
@@ -42,8 +95,10 @@ Resources:
         WebhookApi:
           Type: Api
           Properties:
-            Path: /register
+            Path: /webhook
             Method: post
+            RestApiId:
+              Ref: NotisrApi
 
   StreamerTable:
     Type: AWS::DynamoDB::Table
@@ -56,8 +111,3 @@ Resources:
         - AttributeName: broadcaster_id
           KeyType: HASH
       BillingMode: PAY_PER_REQUEST
-
-Outputs:
-  WebhookApiUrl:
-    Description: "Invoke URL for your webhook endpoint"
-    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/register"

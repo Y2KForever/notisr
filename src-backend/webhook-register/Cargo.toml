@@ -1,0 +1,16 @@
+[package]
+name = "webhook-register"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+lambda_http = "0.8.1"
+aws-config = "0.55.3"
+aws-sdk-dynamodb = "0.25.1"
+aws-sdk-secretsmanager = "0.25.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4.24", features = ["serde"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+futures = "0.3.31"

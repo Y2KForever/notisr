@@ -132,7 +132,7 @@ async fn update_streamer(
                     "broadcaster_id",
                     AttributeValue::S(event.broadcaster_user_id),
                 )
-                .update_expression("SET isLive = :live, lastUpdated = :ts")
+                .update_expression("SET isLive = :live, updated = :ts")
                 .expression_attribute_values(":live", AttributeValue::Bool(is_live))
                 .expression_attribute_values(":ts", AttributeValue::S(timestamp.clone()))
                 .send()
@@ -146,7 +146,7 @@ async fn update_streamer(
                 .table_name(table_name)
                 .key("broadcaster_id", AttributeValue::S(event.broadcaster_user_id.clone()))
                 .update_expression(
-                    "SET displayName = :name, title = :title, category = :category, lastUpdated = :ts",
+                    "SET broadcaster_name = :name, title = :title, category = :category, updated = :ts",
                 )
                 .expression_attribute_values(
                     ":name",
