@@ -23,6 +23,7 @@ bun.lockb
 
 # rust compiled folders
 target/
+dist/
 
 # aws config
 samconfig.toml
