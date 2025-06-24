@@ -30,6 +30,14 @@ Parameters:
     Type: String
     Description: URL for Twitch Authorization endpoint
     Default: https://id.twitch.tv/oauth2/token
+  StreamsUrl:
+    Type: String
+    Description: URL for Twitch streams endpoint
+    Default: https://api.twitch.tv/helix/streams
+  ChannelsUrl:
+    Type: String
+    Description: URL for Twitch channel endpoint
+    Default: https://api.twitch.tv/helix/channels
 
 Resources:
   NotisrApi:
@@ -49,6 +57,8 @@ Resources:
           CALLBACK_URL: !Ref CallbackUrl
           SUBSCRIPTION_URL: !Ref SubscriptionUrl
           TOKEN_URL: !Ref TokenUrl
+          STREAMS_URL: !Ref StreamsUrl
+          CHANNELS_URL: !Ref ChannelsUrl
       Policies:
         - AWSLambdaBasicExecutionRole
         - Statement:

@@ -17,6 +17,8 @@ const SECRET_ARN_ENV: &str = "SECRET_ARN";
 const CALLBACK_URL_ENV: &str = "CALLBACK_URL";
 const TOKEN_URL_ENV: &str = "TOKEN_URL";
 const SUBSCRIPTION_URL_ENV: &str = "SUBSCRIPTION_URL";
+const STREAMS_URL_ENV: &str = "STREAMS_URL";
+const CHANNELS_URL_ENV: &str = "CHANNELS_URL";
 
 #[derive(Deserialize, Debug)]
 struct TwitchSecretConfig {
@@ -28,7 +30,6 @@ struct TwitchSecretConfig {
 
 #[derive(Deserialize, Debug)]
 struct RegisterWebhookBody {
-    broadcaster_name: String,
     broadcaster_id: u32,
 }
 
@@ -58,6 +59,43 @@ struct Transport<'a> {
     secret: &'a str,
 }
 
+#[derive(Deserialize, Debug)]
+struct StreamsResponse {
+    data: Vec<StreamInfo>,
+}
+
+#[derive(Deserialize, Debug)]
+struct StreamInfo {
+    #[serde(rename = "type")]
+    status: String,
+    game_name: String,
+    user_id: String,
+    user_name: String,
+    title: String,
+}
+
+#[derive(Deserialize, Debug)]
+struct Streams {
+    user_id: String,
+    user_name: String,
+    game_name: String,
+    is_live: bool,
+    title: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct Channels {
+    broadcaster_id: String,
+    broadcaster_name: String,
+    game_name: String,
+    title: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct ChannelsResponse {
+    data: Vec<Channels>,
+}
+
 async fn get_twitch_secret_config(
     secrets_client: &SecretsClient,
 ) -> Result<TwitchSecretConfig, Box<dyn std::error::Error>> {
@@ -79,7 +117,8 @@ async fn ids_exist(
     broadcasters: &Vec<RegisterWebhookBody>,
     ddb_client: &DynamoDbClient,
     table_name: &str,
-) -> Result<HashSet<u32>, Error> {
+    secret: &TwitchSecretConfig,
+) -> Result<HashSet<String>, Error> {
     let key_maps: Vec<HashMap<String, AttributeValue>> = broadcasters
         .iter()
         .map(|streamer: &RegisterWebhookBody| {
@@ -120,26 +159,157 @@ async fn ids_exist(
         .filter(|b| !found_ids.contains(&b.broadcaster_id))
         .collect();
 
-    /* Maybe TODO: Might need to add more fields here. Category, isLive etc. */
+    let token_url =
+        std::env::var(TOKEN_URL_ENV).expect("TOKEN_URL_ENV environment variable not set.");
+    let client = reqwest::Client::builder().build()?;
+
+    let params = [
+        ("client_id", &secret.client_id),
+        ("client_secret", &secret.client_secret),
+        ("grant_type", &secret.grant_type),
+    ];
+
+    let auth_response = match client.post(&token_url).query(&params).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("❌ Failed to send auth request: {:?}", e);
+            return Err(e.into());
+        }
+    };
+
+    let auth_resp: AuthResponse = auth_response
+        .json()
+        .await
+        .expect("Failed to fetch access token");
+
+    let mut headers = HeaderMap::new();
+
+    headers.insert("Client-ID", secret.client_id.parse().unwrap());
+    headers.insert(CONTENT_TYPE, "application/json".parse().unwrap());
+
+    let futures = missing_streamers
+        .iter()
+        .map(|broadcaster| {
+            let client = client.clone();
+            let headers = headers.clone();
+            let token = auth_resp.access_token.clone();
+            let id_str = broadcaster.broadcaster_id.to_string();
+            println!("broadcaster_id: {:?}", id_str);
+            let streams_url = std::env::var(STREAMS_URL_ENV).expect("STREAMS_URL_ENV not set");
+
+            async move {
+                let resp = client
+                    .get(&streams_url)
+                    .query(&[("user_id", &id_str)])
+                    .bearer_auth(&token)
+                    .headers(headers)
+                    .send()
+                    .await;
+
+                if let Err(err) = &resp {
+                    eprintln!("Error {:?}", err);
+                    panic!("Error {:?}", err);
+                }
+                (id_str, resp)
+            }
+            .boxed()
+        })
+        .collect::<Vec<_>>();
+
+    let res: Vec<(String, Result<reqwest::Response, reqwest::Error>)> = join_all(futures).await;
+    let mut streams: Vec<Streams> = Vec::new();
+
+    for (i, (broadcaster_id, result)) in res.into_iter().enumerate() {
+        match result {
+            Ok(resp) => {
+                let stream: StreamsResponse = match resp.json().await {
+                    Ok(x) => x,
+                    Err(err) => {
+                        eprintln!("Response {i}: failed to parse JSON: {:?}", err);
+                        return Err(err.into());
+                    }
+                };
+
+                if !stream.data.is_empty() {
+                    for item in &stream.data {
+                        streams.push(Streams {
+                            game_name: item.game_name.to_string(),
+                            user_id: item.user_id.to_string(),
+                            user_name: item.user_name.to_string(),
+                            is_live: if item.status == "live" { true } else { false },
+                            title: item.title.to_string(),
+                        });
+                    }
+                } else {
+                    let token = auth_resp.access_token.clone();
+                    let channels_url =
+                        std::env::var(CHANNELS_URL_ENV).expect("CHANNELS_URL_ENV not set");
+
+                    let channel_response = client
+                        .get(channels_url)
+                        .query(&[("broadcaster_id", &broadcaster_id)])
+                        .bearer_auth(&token)
+                        .headers(headers.clone())
+                        .send()
+                        .await
+                        .map_err(|e| {
+                            eprintln!("Failed to fetch channels: {:?}", e);
+                            Error::from(e)
+                        })?;
+
+                    let channels: ChannelsResponse =
+                        channel_response.json().await.map_err(|e| {
+                            eprintln!("Error parsing channel json: {:?}", e);
+                            Error::from(e)
+                        })?;
+
+                    println!("Channel response: {:?}", channels);
+
+                    for ch in channels.data {
+                        streams.push(Streams {
+                            user_id: ch.broadcaster_id,
+                            user_name: ch.broadcaster_name,
+                            game_name: ch.game_name,
+                            is_live: false,
+                            title: ch.title,
+                        });
+                    }
+                }
+            }
+            Err(err) => {
+                eprintln!("Failed response: {:?}", err);
+                return Err(err.into());
+            }
+        }
+    }
 
     let mut newly_inserted = HashSet::new();
-    for chunk in missing_streamers.chunks(25) {
+    for chunk in streams.chunks(25) {
         let write_requests: Vec<WriteRequest> = chunk
             .iter()
             .map(|streamer| {
                 let mut item = HashMap::new();
                 item.insert(
                     "broadcaster_id".to_string(),
-                    AttributeValue::S(streamer.broadcaster_id.to_string()),
+                    AttributeValue::S(streamer.user_id.to_string()),
                 );
                 item.insert(
                     "broadcaster_name".to_string(),
-                    AttributeValue::S(streamer.broadcaster_name.to_string()),
+                    AttributeValue::S(streamer.user_name.to_string()),
+                );
+                item.insert(
+                    "category".to_string(),
+                    AttributeValue::S(streamer.game_name.to_string()),
+                );
+                item.insert(
+                    "title".to_string(),
+                    AttributeValue::S(streamer.title.to_string()),
                 );
                 item.insert(
                     "updated".to_string(),
                     AttributeValue::S(Utc::now().to_rfc3339()),
                 );
+                item.insert("isLive".to_string(), AttributeValue::Bool(streamer.is_live));
                 let put_req = PutRequest::builder().set_item(Some(item)).build();
                 WriteRequest::builder().put_request(put_req).build()
             })
@@ -151,14 +321,14 @@ async fn ids_exist(
             .send()
             .await?;
 
-        newly_inserted.extend(chunk.iter().map(|s| s.broadcaster_id));
+        newly_inserted.extend(chunk.iter().map(|s| s.user_id.clone()));
     }
 
     Ok(newly_inserted)
 }
 
 async fn register_webhook(
-    broadcaster_ids: HashSet<u32>,
+    broadcaster_ids: HashSet<String>,
     secret: &TwitchSecretConfig,
 ) -> Result<(), Error> {
     let token_url =
@@ -174,7 +344,6 @@ async fn register_webhook(
         Ok(r) => r,
         Err(e) => {
             eprintln!("❌ Failed to send auth request: {:?}", e);
-            // You can return a 500 here, or propagate, depending on your handler signature:
             return Err(e.into());
         }
     };
@@ -240,7 +409,6 @@ async fn register_webhook(
                         .send()
                         .await;
 
-                    // You can still inspect or log per‐response here:
                     if let Err(err) = &resp {
                         eprintln!("Failed {} for {}: {:?}", evt_type, id_str, err);
                     }
@@ -297,13 +465,14 @@ async fn function_handler(request: Request) -> Result<Response<Body>, Error> {
         }
     };
 
-    let newly_created_ids = match ids_exist(&payload, &ddb_client, &streamer_table_name).await {
-        Ok(set) => set,
-        Err(e) => {
-            eprintln!("DynamoDB create ids failed: {:?}", e);
-            return Ok(Response::builder().status(500).body(Body::Empty).unwrap());
-        }
-    };
+    let newly_created_ids =
+        match ids_exist(&payload, &ddb_client, &streamer_table_name, &secret).await {
+            Ok(set) => set,
+            Err(e) => {
+                eprintln!("DynamoDB create ids failed: {:?}", e);
+                return Ok(Response::builder().status(500).body(Body::Empty).unwrap());
+            }
+        };
 
     match register_webhook(newly_created_ids, &secret).await {
         Ok(_) => {}
