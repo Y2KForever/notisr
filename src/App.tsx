@@ -7,7 +7,7 @@ import { listen } from '@tauri-apps/api/event';
 
 export const App = () => {
   useEffect(() => {
-    listen("logged_in", (event) => {
+    listen("logged_in", () => {
       invoke('shutdown_server');
     })
   }, []);
