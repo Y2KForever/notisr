@@ -2259,6 +2259,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-deep-link",
  "tauri-plugin-opener",
+ "tauri-plugin-positioner",
  "tokio",
 ]
 
@@ -3970,6 +3971,21 @@ dependencies = [
  "url",
  "windows",
  "zbus",
+]
+
+[[package]]
+name = "tauri-plugin-positioner"
+version = "2.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "01da0c9140e941f12b5ac9238fadf27b05c8f3b3244b77703d7e733925ad514d"
+dependencies = [
+ "log",
+ "serde",
+ "serde_json",
+ "serde_repr",
+ "tauri",
+ "tauri-plugin",
+ "thiserror 2.0.12",
 ]
 
 [[package]]

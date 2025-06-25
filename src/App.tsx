@@ -1,30 +1,44 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import './App.css';
-import { Glitch } from './components/Glitch';
-import { Button } from './components/ui/button';
 import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
+import { listen, UnlistenFn } from '@tauri-apps/api/event';
+import { LogIn } from './views/LogIn';
 
 export const App = () => {
+  const [layout, setLayout] = useState<string>('list');
   useEffect(() => {
-    listen("logged_in", () => {
-      invoke('shutdown_server');
-    })
+    invoke('on_startup', {
+      fileName: 'config.json',
+    }).then((val) => {
+      if (val === 'log_in') {
+        setLayout('login');
+      }
+    });
   }, []);
 
+  useEffect(() => {
+    let unlisten: UnlistenFn;
+    listen('logged_in', (_event) => {
+      setLayout('list');
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => {
+      unlisten && unlisten();
+    };
+  });
+
   return (
-    <div className="flex flex-col h-screen justify-center align-center">
-      <div className="flex justify-center">
-        <Button
-          onClick={() => {
-            invoke('login');
-          }}
-          className={`bg-[#9146FF] text-center align-center cursor-pointer`}
-        >
-          <Glitch />
-          Login with Twitch
-        </Button>
-      </div>
-    </div>
+    <>
+      {layout === 'login' ? (
+        <LogIn />
+      ) : (
+        layout === 'list' && (
+          <>
+            <p>List view</p>
+          </>
+        )
+      )}
+    </>
   );
 };
