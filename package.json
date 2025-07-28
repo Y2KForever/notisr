@@ -17,6 +17,7 @@
     "@aws-sdk/protocol-http": "^3.374.0",
     "@aws-sdk/signature-v4": "^3.374.0",
     "@radix-ui/react-slot": "^1.2.3",
+    "@radix-ui/react-tooltip": "^1.2.7",
     "@tailwindcss/vite": "^4.1.10",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-deep-link": "^2.3.0",
