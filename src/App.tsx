@@ -3,6 +3,8 @@ import './App.css';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { LogIn } from './views/LogIn';
+import { List } from './views/List';
+import { Menu } from './components/Menu';
 
 export const App = () => {
   const [layout, setLayout] = useState<string>('list');
@@ -29,16 +31,9 @@ export const App = () => {
   });
 
   return (
-    <>
-      {layout === 'login' ? (
-        <LogIn />
-      ) : (
-        layout === 'list' && (
-          <>
-            <p>List view</p>
-          </>
-        )
-      )}
-    </>
+    <div className="w-full h-full dark:bg-[#1f1f23] bg-[#efeff1]">
+      <Menu />
+      {layout === 'login' ? <LogIn /> : layout === 'list' && <List />}
+    </div>
   );
 };
