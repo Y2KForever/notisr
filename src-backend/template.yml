@@ -19,6 +19,9 @@ Parameters:
   TwitchSecretArn:
     Type: String
     Description: ARN of the SecretsManager secret
+  TwitchClientId:
+    Type: String
+    Description: Client ID for Twitch
   CallbackUrl:
     Type: String
     Description: URL for webhook callback
@@ -66,6 +69,7 @@ Resources:
               Action:
                 - dynamodb:PutRequest
                 - dynamodb:WriteRequest
+                - dynamodb:PutItem
                 - dynamodb:BatchGetItem
                 - dynamodb:BatchWriteItem
               Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${StreamerTableName}
@@ -79,8 +83,7 @@ Resources:
           Properties:
             Path: /register
             Method: post
-            RestApiId:
-              Ref: NotisrApi
+            RestApiId: !Ref NotisrApi
 
   WebhookHandlerFunction:
     Type: AWS::Serverless::Function
@@ -107,8 +110,7 @@ Resources:
           Properties:
             Path: /webhook
             Method: post
-            RestApiId:
-              Ref: NotisrApi
+            RestApiId: !Ref NotisrApi
 
   StreamerTable:
     Type: AWS::DynamoDB::Table
@@ -121,3 +123,83 @@ Resources:
         - AttributeName: broadcaster_id
           KeyType: HASH
       BillingMode: PAY_PER_REQUEST
+
+  AppSyncDynamoRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: appsync.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: AppSyncDynamoPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:BatchGetItem
+                  - dynamodb:UpdateItem
+                Resource: !GetAtt StreamerTable.Arn
+
+  GraphQLApi:
+    Type: AWS::Serverless::GraphQLApi
+    Properties:
+      Name: NotisrGQLApi
+      Auth:
+        Type: OPENID_CONNECT
+        OpenIDConnect:
+          Issuer: https://id.twitch.tv/oauth2
+          ClientId: !Ref TwitchClientId
+          IatTTL: 8640000
+          AuthTTL: 8640000
+      SchemaUri: ./schema.graphql
+      DataSources:
+        DynamoDb:
+          StreamerTableSource:
+            ServiceRoleArn: !GetAtt AppSyncDynamoRole.Arn
+            TableName: !Ref StreamerTableName
+            TableArn: !GetAtt StreamerTable.Arn
+      Functions:
+        BatchGetStreamers:
+          Runtime:
+            Name: APPSYNC_JS
+            Version: 1.0.0
+          DataSource: StreamerTableSource
+          CodeUri: ./appsync-functions/batchGetStreamers.js
+        UpdateStreamer:
+          Runtime:
+            Name: APPSYNC_JS
+            Version: 1.0.0
+          DataSource: StreamerTableSource
+          CodeUri: ./appsync-functions/updateStreamer.js
+      Resolvers:
+        Query:
+          batchGetStreamers:
+            Runtime:
+              Name: APPSYNC_JS
+              Version: 1.0.0
+            Pipeline:
+              - BatchGetStreamers
+        Mutation:
+          updateStreamer:
+            Runtime:
+              Name: APPSYNC_JS
+              Version: 1.0.0
+            CodeUri: ./appsync-functions/updateStreamer.js
+            Pipeline:
+              - UpdateStreamer
+
+Outputs:
+  GraphQLApiUrl:
+    Description: 'AppSync GraphQL endpoint URL'
+    Value: !GetAtt GraphQLApi.GraphQLUrl
+
+  GraphQLApiId:
+    Description: 'AppSync API ID'
+    Value: !GetAtt GraphQLApi.ApiId

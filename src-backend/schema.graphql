@@ -1,0 +1,34 @@
+schema {
+  query: Query
+  mutation: Mutation
+  subscription: Subscription
+}
+
+type Streamer {
+  broadcaster_id: String!
+  broadcaster_name: String!
+  category: String!
+  title: String!
+  updated: AWSDateTime!
+  isLive: Boolean!
+}
+
+type Query {
+  batchGetStreamers(broadcaster_ids: [String!]!): [Streamer]!
+    @aws_oidc
+}
+
+type Mutation {
+  updateStreamer(
+    broadcaster_id: String!
+    broadcaster_name: String!
+    category: String!
+    title: String!
+    isLive: Boolean!
+  ): Streamer!
+    @aws_oidc
+}
+
+type Subscription {
+  onUpdateStreamer(broadcaster_id: String!): Streamer! @aws_subscribe(mutations: ["updateStreamer"])
+}
