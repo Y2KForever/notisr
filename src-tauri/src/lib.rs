@@ -76,7 +76,7 @@ fn login(app: AppHandle) {
         .take(7)
         .map(char::from)
         .collect();
-    let uri = Url::parse(format!("https://id.twitch.tv/oauth2/authorize?force_verify=true&response_type=code&client_id={}&redirect_uri={}&scope={}&state={}", client_id, redirect_uri, scope, state).as_str()).expect("Failed to parse URL");
+    let uri = Url::parse(format!("https://id.twitch.tv/oauth2/authorize?force_verify=true&response_type=token+id_token&client_id={}&redirect_uri={}&scope={}&state={}", client_id, redirect_uri, scope, state).as_str()).expect("Failed to parse URL");
     let _new_win =
         tauri::WebviewWindowBuilder::new(&app, "login", tauri::WebviewUrl::External(uri))
             .title("Login")
@@ -89,29 +89,47 @@ fn handle_setup_user(path: PathBuf, app: AppHandle) -> ServerCtl {
     let server = rouille::Server::new("localhost:1337", move | request | {
         router!(request,
             (GET) (/) => {
-                let code = match request.get_param("code") {
-                    Some(c) => c,
-                    None => {
-                        return Response::text("Missing `code` query parameter").with_status_code(400);
-                    }
+                let html = r#"
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <title>Processing Login</title>
+                    <script>
+                        const fragment = new URLSearchParams(window.location.hash.substring(1));
+                        const params = new URLSearchParams();
+                        if (fragment.has('id_token')) params.set('id_token', fragment.get('id_token'));
+                        if (fragment.has('access_token')) params.set('access_token', fragment.get('access_token'));
+                        if (fragment.has('token_type')) params.set('token_type', fragment.get('token_type'));
+                        window.location = `/token?${params.toString()}`;
+                    </script>
+                </head>
+                <body>
+                    <p>Processing login...</p>
+                </body>
+                </html>
+                "#;
+                Response::html(html)
+            },
+            (GET) (/token) => {
+                let id_token = match request.get_param("id_token") {
+                    Some(t) => t,
+                    None => return Response::text("Missing id_token").with_status_code(400),
                 };
-                let contents = format!(r#"{{"code":"{}"}}"#, code);
-                let parent = &path.parent().unwrap();
-                if let Err(e) = fs::create_dir_all(parent){
-                    eprintln!("Failed to create config directory {:?}", e);
+                println!("Token: {:?}", id_token);
+                let contents = format!(r#"{{"id_token":"{}"}}"#, id_token);
+                let parent = path.parent().unwrap();
+                if let Err(e) = fs::create_dir_all(parent) {
+                    eprintln!("Failed to create directory: {:?}", e);
                 }
-                if let Err(err) = fs::write(&path, &contents){
-                    eprintln!("Failed to write file. Error: {:?}", err);
+                if let Err(e) = fs::write(&path, &contents) {
+                    eprintln!("Failed to write token: {:?}", e);
                 }
-
                 app.get_webview_window("login").unwrap().close().unwrap();
                 let window = app.get_webview_window("main").unwrap();
                 window.emit("logged_in", ()).unwrap();
-
                 set_window_size(&window);
                 set_window_position(&window);
-
-                Response::empty_204()
+                Response::text("Login successful! You can close this window.")
             },
             _ => Response::empty_404()
         )
