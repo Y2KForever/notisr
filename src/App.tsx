@@ -9,9 +9,7 @@ import { Menu } from './components/Menu';
 export const App = () => {
   const [layout, setLayout] = useState<string>('list');
   useEffect(() => {
-    invoke('on_startup', {
-      fileName: 'config.json',
-    }).then((val) => {
+    invoke('on_startup').then((val) => {
       if (val === 'log_in') {
         setLayout('login');
       }
