@@ -7,8 +7,6 @@
   ],
   "permissions": [
     "core:default",
-    "opener:default",
-    "deep-link:default",
-    "deep-link:allow-register"
+    "opener:default"
   ]
 }

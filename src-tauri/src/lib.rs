@@ -1,158 +1,21 @@
-use dirs;
-use rand::{distr::Alphanumeric, Rng};
-use rouille::{router, Response};
-use std::{
-    env, fs,
-    io::{self, ErrorKind},
-    path::PathBuf,
-    sync::mpsc::Sender,
-    thread,
-};
-use tauri::{
-    webview::PageLoadPayload, AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, Url,
-    Webview, WebviewWindow,
-};
+pub mod command;
+mod oauth;
+mod util;
 
-#[derive(Clone)]
-struct ServerCtl {
-    stop_tx: Sender<()>,
-}
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
+use keyring::{Entry, Error as EntryError};
+use reqwest::blocking::Client as BlockingClient;
+use rouille::{router, Response, Server};
+use serde_json::Value;
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewWindow};
 
-fn get_file(filename: String) -> io::Result<String> {
-    let data_dir = generate_file_path(filename);
-    fs::read_to_string(data_dir)
-}
-
-fn generate_file_path(filename: String) -> PathBuf {
-    let mut data_dir = dirs::data_local_dir()
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::NotFound,
-                "couldn't determine local data directory",
-            )
-        })
-        .unwrap();
-    data_dir.push("notisr");
-    data_dir.push(filename);
-    data_dir
-}
-
-#[tauri::command]
-fn shutdown_server(state: tauri::State<Option<ServerCtl>>) {
-    if let Some(ctl) = state.inner().as_ref() {
-        let _ = ctl.stop_tx.send(());
-    }
-}
-
-#[tauri::command]
-fn on_startup(app: AppHandle, file_name: String) -> Option<String> {
-    let data = get_file(file_name);
-
-    match data {
-        Ok(_contens) => {
-            println!("File exist. Continue");
-            None
-        }
-        Err(e) => match e.kind() {
-            ErrorKind::NotFound => {
-                tauri::async_runtime::block_on(first_time_run("config.json".into(), app)).unwrap();
-                Some("log_in".to_string())
-            }
-            _ => {
-                panic!("Something went horribly wrong: {:?}", e)
-            }
-        },
-    }
-}
-
-#[tauri::command]
-fn login(app: AppHandle) {
-    dotenvy::dotenv().ok();
-    let client_id = env::var("CLIENT_ID").expect("CLIENT_ID env not set");
-    let redirect_uri = env::var("REDIRECT_URI").expect("REDIRECT_URI env not set");
-    let scope = env::var("SCOPE").expect("SCOPE env not set");
-    let state: String = rand::rng()
-        .sample_iter(&Alphanumeric)
-        .take(7)
-        .map(char::from)
-        .collect();
-    let uri = Url::parse(format!("https://id.twitch.tv/oauth2/authorize?force_verify=true&response_type=token+id_token&client_id={}&redirect_uri={}&scope={}&state={}", client_id, redirect_uri, scope, state).as_str()).expect("Failed to parse URL");
-    let _new_win =
-        tauri::WebviewWindowBuilder::new(&app, "login", tauri::WebviewUrl::External(uri))
-            .title("Login")
-            .inner_size(800.0, 600.0)
-            .build()
-            .unwrap();
-}
-
-fn handle_setup_user(path: PathBuf, app: AppHandle) -> ServerCtl {
-    let server = rouille::Server::new("localhost:1337", move | request | {
-        router!(request,
-            (GET) (/) => {
-                let html = r#"
-                <!DOCTYPE html>
-                <html>
-                <head>
-                    <title>Processing Login</title>
-                    <script>
-                        const fragment = new URLSearchParams(window.location.hash.substring(1));
-                        const params = new URLSearchParams();
-                        if (fragment.has('id_token')) params.set('id_token', fragment.get('id_token'));
-                        if (fragment.has('access_token')) params.set('access_token', fragment.get('access_token'));
-                        if (fragment.has('token_type')) params.set('token_type', fragment.get('token_type'));
-                        window.location = `/token?${params.toString()}`;
-                    </script>
-                </head>
-                <body>
-                    <p>Processing login...</p>
-                </body>
-                </html>
-                "#;
-                Response::html(html)
-            },
-            (GET) (/token) => {
-                let id_token = match request.get_param("id_token") {
-                    Some(t) => t,
-                    None => return Response::text("Missing id_token").with_status_code(400),
-                };
-                println!("Token: {:?}", id_token);
-                let contents = format!(r#"{{"id_token":"{}"}}"#, id_token);
-                let parent = path.parent().unwrap();
-                if let Err(e) = fs::create_dir_all(parent) {
-                    eprintln!("Failed to create directory: {:?}", e);
-                }
-                if let Err(e) = fs::write(&path, &contents) {
-                    eprintln!("Failed to write token: {:?}", e);
-                }
-                app.get_webview_window("login").unwrap().close().unwrap();
-                let window = app.get_webview_window("main").unwrap();
-                window.emit("logged_in", ()).unwrap();
-                set_window_size(&window);
-                set_window_position(&window);
-                Response::text("Login successful! You can close this window.")
-            },
-            _ => Response::empty_404()
-        )
-    }).unwrap();
-    let (_, stop_tx) = server.stoppable();
-    ServerCtl { stop_tx }
-}
-
-async fn first_time_run(file_name: String, app: AppHandle) -> io::Result<()> {
-    let data_dir = generate_file_path(file_name);
-    match tokio::fs::read_to_string(&data_dir).await {
-        Ok(_contents) => Ok(()),
-        Err(e) if e.kind() == ErrorKind::NotFound => {
-            println!("File not found. Starting web server.");
-            thread::spawn(|| handle_setup_user(data_dir, app));
-            Ok(())
-        }
-        Err(e) => {
-            println!("Failed to read config.json: {:?}", e);
-            Err(e)
-        }
-    }
-}
+use crate::command::{login, on_startup, shutdown_server, ServerCtl};
+use crate::oauth::{refresh_access_token, validate_access_token, verify_id_token};
+use crate::util::load_secret;
 
 fn set_window_size(window: &WebviewWindow) {
     let opt_montior = window.current_monitor().unwrap();
@@ -191,33 +54,191 @@ fn set_window_position(window: &WebviewWindow) {
         .unwrap();
 }
 
+fn handle_setup_user(
+    app: AppHandle,
+    csrf_state: String,
+    nonce: Arc<Mutex<Option<String>>>,
+    code_verifier: Arc<Mutex<Option<String>>>,
+) -> ServerCtl {
+    let server = Server::new("127.0.0.1:1337", move |request| {
+        router!(request,
+            (GET) (/) => {
+                let qs = request.raw_query_string();
+                let params: HashMap<_,_> = url::form_urlencoded::parse(qs.as_bytes()).into_owned().collect();
+
+                let code = params.get("code").ok_or_else(|| Response::text("Missing code").with_status_code(400)).unwrap().to_string();
+                let returned_state = params.get("state").ok_or_else(|| Response::text("Missing state").with_status_code(400)).unwrap().to_string();
+
+                if returned_state != csrf_state {
+                    return Response::text("Invalid state").with_status_code(400);
+                }
+
+                let nonce_value = {
+                    let mut guard = nonce.lock().unwrap();
+                    guard.take().ok_or_else(|| Response::text("Nonce already used").with_status_code(400)).unwrap()
+                };
+
+                if let Some(returned_challenge) = params.get("code_challenge") {
+                    let expected = {
+                        let guard = code_verifier.lock().unwrap();
+                        let maybe_v = guard.as_ref().expect("verifier already consumed");
+                        let digest = Sha256::digest(maybe_v.as_bytes());
+                        URL_SAFE_NO_PAD.encode(digest)
+                    };
+                    if returned_challenge != &expected {
+                        return Response::text("PKCE challenge mismatch").with_status_code(400);
+                    }
+                }
+
+                let verifier = {
+                    let mut lock = code_verifier.lock().unwrap();
+                    lock.take().expect("PKCE verifier already consumed")
+                };
+
+                let client_id = std::env::var("CLIENT_ID").expect("CLIENT_ID env not set");
+                let client_secret = std::env::var("CLIENT_SECRET").expect("CLIENT_SECRET env not set");
+                let redirect_uri = std::env::var("REDIRECT_URI").expect("REDIRECT_URI env not set");
+
+                let http_client = BlockingClient::new();
+                let params = [
+                    ("client_id", client_id.as_str()),
+                    ("client_secret", client_secret.as_str()),
+                    ("grant_type", "authorization_code"),
+                    ("code", code.as_str()),
+                    ("redirect_uri", redirect_uri.as_str()),
+                    ("code_verifier", verifier.as_str()),
+                ];
+
+                let resp = match http_client.post("https://id.twitch.tv/oauth2/token").form(&params).send() {
+                    Ok(r) => r,
+                    Err(e) => return Response::text(format!("Network error: {:?}", e)).with_status_code(500)
+                };
+                let status = resp.status();
+                let body = match resp.text() {
+                    Ok(t) => t,
+                    Err(e) => return Response::text(format!("Failed to read token body: {:?}", e)).with_status_code(500)
+                };
+
+                if status.is_success() {
+                    let token_val: Value = match serde_json::from_str(&body) {
+                        Ok(v) => v,
+                        Err(e) => return Response::text(format!("Invalid token JSON: {:?}", e)).with_status_code(500)
+                    };
+
+                    let id_token_str = match token_val.get("id_token").and_then(|v| v.as_str()) {
+                        Some(s) => s,
+                        None => return Response::text("no id_token in response").with_status_code(500)
+                    };
+
+                    let jwks_uri = "https://id.twitch.tv/oauth2/keys";
+                    let expected_issuer = "https://id.twitch.tv/oauth2";
+
+                    let claims = match verify_id_token(id_token_str, jwks_uri, expected_issuer, &client_id, Some(&nonce_value)) {
+                        Ok(c) => c,
+                        Err(e) => return Response::text(format!("id_token verify failed: {:?}", e)).with_status_code(400)
+                    };
+
+                    Entry::new("notisr", "id_token").expect("failed to create entry").set_secret(id_token_str.as_bytes()).expect("failed to set id_token to entry");
+
+                    if let Some(access_token) = token_val.get("access_token").and_then(|v| v.as_str()) {
+                        Entry::new("notisr", "access_token").unwrap()
+                            .set_secret(access_token.as_bytes()).unwrap();
+                    }
+
+                    Entry::new("notisr", "user_id").expect("Failed to create user_id entry").set_secret(claims.sub.as_bytes()).expect("failed to set user_id to entry");
+
+                    if let Some(refresh_token) = token_val.get("refresh_token").and_then(|v| v.as_str()) {
+                        Entry::new("notisr", "refresh_token").expect("failed to create refresh_token entry").set_secret(refresh_token.as_bytes()).expect("failed to set refresh_token");
+                    }
+
+                    if let Some(win) = app.get_webview_window("login") { let _ = win.close(); }
+                    if let Some(window) = app.get_webview_window("main") {
+                        window.try_state::<Mutex<Option<String>>>().unwrap().lock().unwrap().take();
+                        let _ = window.emit("logged_in", ());
+                        set_window_size(&window);
+                        set_window_position(&window);
+                    }
+
+                    Response::text("Login successful—token stored securely!")
+                } else if status.is_client_error() {
+                    Response::text(format!("Client error: {}, body: {}", status, body)).with_status_code(400)
+                } else if status.is_server_error() {
+                    Response::text(format!("Server error: {}, body: {}", status, body)).with_status_code(500)
+                } else {
+                    Response::text(format!("Unexpected status: {}, body: {}", status, body)).with_status_code(500)
+                }
+            },
+            _ => Response::empty_404()
+        )
+    }).expect("Failed to start server");
+
+    let (handle, stop_tx) = server.stoppable();
+    ServerCtl { stop_tx, handle }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
-            let data = get_file("config.json".to_string());
+            let auth_state: Mutex<Option<String>> = Mutex::new(None);
+            app.manage(auth_state);
 
-            match data {
-                Ok(_contens) => {
-                    let window = app.get_webview_window("main").unwrap();
-                    set_window_size(&window);
-                    Ok(())
+            // Switch out to utils.load_secret
+            let entry = Entry::new("notisr", "access_token").unwrap();
+
+            let decision = match entry.get_secret() {
+                Ok(access_token) => {
+                    let access_token_str = str::from_utf8(&access_token).unwrap();
+                    match validate_access_token(&access_token_str) {
+                        Ok(Some(resp)) => {
+                            if resp.expires_in.unwrap_or(0) > 0 {
+                                Some(());
+                            }
+                            eprintln!("Access token appears expired, attempting refresh...");
+                        }
+                        Ok(None) => {
+                            eprintln!("Access token invalid (401). Will try refresh if possible.");
+                        }
+                        Err(e) => {
+                            eprintln!("validate error during setup: {:?}", e);
+                            Some("log_in".to_string());
+                        }
+                    }
+
+                    let refresh_token = match load_secret("refresh_token") {
+                        Some(r) => r,
+                        None => "log_in".to_string(),
+                    };
+                    match refresh_access_token(&refresh_token) {
+                        Ok(()) => None,
+                        Err(e) => {
+                            eprint!("Refresh failed: {:?}", e);
+                            Some("log_in".to_string())
+                        }
+                    }
                 }
-                Err(e) => match e.kind() {
-                    ErrorKind::NotFound => Ok(()),
+                Err(e) => match e {
+                    EntryError::NoEntry => Some("log_in".to_string()),
                     _ => {
                         panic!("Something went horribly wrong: {:?}", e)
                     }
                 },
-            }
+            };
+            *app.state::<Mutex<Option<String>>>().lock().unwrap() = decision;
+            Ok(())
         })
-        .on_page_load(|webview: &Webview, _payload: &PageLoadPayload| {
-            let data = get_file("config.json".to_string());
-            match data {
-                Ok(_contens) => {
-                    set_window_position(&webview.window().get_webview_window("main").unwrap())
-                }
-                _ => {}
+        .on_page_load(|webview, _payload| {
+            let x = webview.app_handle();
+            let v = x
+                .try_state::<Mutex<Option<String>>>()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .clone();
+
+            if v.is_none() {
+                set_window_position(&webview.window().get_webview_window("main").unwrap());
+                set_window_size(&webview.window().get_webview_window("main").unwrap());
             }
         })
         .plugin(tauri_plugin_opener::init())
