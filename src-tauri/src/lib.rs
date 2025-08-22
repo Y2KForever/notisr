@@ -1,5 +1,7 @@
+mod appsync;
 pub mod command;
 mod oauth;
+mod twitch;
 mod util;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -11,56 +13,64 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewWindow};
+use tauri::{
+  AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, RunEvent,
+  WebviewWindow,
+};
+use tauri_plugin_notification::{NotificationExt, PermissionState};
 
+use crate::appsync::{start_ws_client, stop_ws_client};
 use crate::command::{login, on_startup, shutdown_server, ServerCtl};
-use crate::oauth::{refresh_access_token, validate_access_token, verify_id_token};
+use crate::oauth::{
+  refresh_access_token, validate_access_token, verify_id_token,
+};
 use crate::util::load_secret;
 
 fn set_window_size(window: &WebviewWindow) {
-    let opt_montior = window.current_monitor().unwrap();
-    let monitor = match opt_montior {
-        Some(m) => m,
-        None => {
-            panic!("No monitor detected.")
-        }
-    };
+  let opt_monitor = window.current_monitor().unwrap();
 
-    window
-        .set_size(PhysicalSize {
-            width: 500.0,
-            height: monitor.size().height as f64,
-        })
-        .unwrap();
+  let monitor = match opt_monitor {
+    Some(m) => m,
+    None => {
+      panic!("Wtf no monitor?")
+    }
+  };
+
+  window
+    .set_size(PhysicalSize {
+      width: 500.0,
+      height: monitor.size().height as f64,
+    })
+    .unwrap();
 }
 
 fn set_window_position(window: &WebviewWindow) {
-    let opt_monitor = window.current_monitor().unwrap();
+  let opt_monitor = window.current_monitor().unwrap();
 
-    let monitor = match opt_monitor {
-        Some(m) => m,
-        None => {
-            panic!("Wtf no monitor?")
-        }
-    };
+  let monitor = match opt_monitor {
+    Some(m) => m,
+    None => {
+      panic!("Wtf no monitor?")
+    }
+  };
 
-    let size = window.inner_size().unwrap();
+  let size = window.inner_size().unwrap();
 
-    window
-        .set_position(PhysicalPosition {
-            x: (monitor.size().width - size.width) as f64,
-            y: 0.0,
-        })
-        .unwrap();
+  window
+    .set_position(PhysicalPosition {
+      x: (monitor.size().width - size.width) as f64,
+      y: 0.0,
+    })
+    .unwrap();
 }
 
 fn handle_setup_user(
-    app: AppHandle,
-    csrf_state: String,
-    nonce: Arc<Mutex<Option<String>>>,
-    code_verifier: Arc<Mutex<Option<String>>>,
+  app: AppHandle,
+  csrf_state: String,
+  nonce: Arc<Mutex<Option<String>>>,
+  code_verifier: Arc<Mutex<Option<String>>>,
 ) -> ServerCtl {
-    let server = Server::new("127.0.0.1:1337", move |request| {
+  let server = Server::new("127.0.0.1:1337", move |request| {
         router!(request,
             (GET) (/) => {
                 let qs = request.raw_query_string();
@@ -172,78 +182,129 @@ fn handle_setup_user(
         )
     }).expect("Failed to start server");
 
-    let (handle, stop_tx) = server.stoppable();
-    ServerCtl { stop_tx, handle }
+  let (handle, stop_tx) = server.stoppable();
+  ServerCtl { stop_tx, handle }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
-        .setup(|app| {
-            let auth_state: Mutex<Option<String>> = Mutex::new(None);
-            app.manage(auth_state);
+  let builder = tauri::Builder::default()
+    .plugin(tauri_plugin_notification::init())
+    .setup(|app| {
+      let auth_state: Mutex<Option<String>> = Mutex::new(None);
+      app.manage(auth_state);
 
-            // Switch out to utils.load_secret
-            let entry = Entry::new("notisr", "access_token").unwrap();
+      // Switch out to utils.load_secret
+      let entry = Entry::new("notisr", "access_token").unwrap();
+      let mut refresh = false;
 
-            let decision = match entry.get_secret() {
-                Ok(access_token) => {
-                    let access_token_str = str::from_utf8(&access_token).unwrap();
-                    match validate_access_token(&access_token_str) {
-                        Ok(Some(resp)) => {
-                            if resp.expires_in.unwrap_or(0) > 0 {
-                                Some(());
-                            }
-                            eprintln!("Access token appears expired, attempting refresh...");
-                        }
-                        Ok(None) => {
-                            eprintln!("Access token invalid (401). Will try refresh if possible.");
-                        }
-                        Err(e) => {
-                            eprintln!("validate error during setup: {:?}", e);
-                            Some("log_in".to_string());
-                        }
-                    }
-
-                    let refresh_token = match load_secret("refresh_token") {
-                        Some(r) => r,
-                        None => "log_in".to_string(),
-                    };
-                    match refresh_access_token(&refresh_token) {
-                        Ok(()) => None,
-                        Err(e) => {
-                            eprint!("Refresh failed: {:?}", e);
-                            Some("log_in".to_string())
-                        }
-                    }
-                }
-                Err(e) => match e {
-                    EntryError::NoEntry => Some("log_in".to_string()),
-                    _ => {
-                        panic!("Something went horribly wrong: {:?}", e)
-                    }
-                },
-            };
-            *app.state::<Mutex<Option<String>>>().lock().unwrap() = decision;
-            Ok(())
-        })
-        .on_page_load(|webview, _payload| {
-            let x = webview.app_handle();
-            let v = x
-                .try_state::<Mutex<Option<String>>>()
-                .unwrap()
-                .lock()
-                .unwrap()
-                .clone();
-
-            if v.is_none() {
-                set_window_position(&webview.window().get_webview_window("main").unwrap());
-                set_window_size(&webview.window().get_webview_window("main").unwrap());
+      let decision = match entry.get_secret() {
+        Ok(access_token) => {
+          let access_token_str = str::from_utf8(&access_token).unwrap();
+          match validate_access_token(&access_token_str) {
+            Ok(Some(resp)) => {
+              if resp.expires_in.unwrap_or(0) > 0 {
+                Some(());
+              } else {
+                eprintln!(
+                  "Access token appears expired, attempting refresh..."
+                );
+                refresh = true;
+              }
             }
-        })
-        .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_positioner::init())
-        .invoke_handler(tauri::generate_handler![login, shutdown_server, on_startup])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+            Ok(None) => {
+              eprintln!(
+                "Access token invalid (401). Will try refresh if possible."
+              );
+              refresh = true;
+            }
+            Err(e) => {
+              eprintln!("validate error during setup: {:?}", e);
+              Some("log_in".to_string());
+            }
+          }
+          if refresh == true {
+            let refresh_token = match load_secret("refresh_token") {
+              Some(r) => r,
+              None => "log_in".to_string(),
+            };
+            match refresh_access_token(&refresh_token) {
+              Ok(_) => None,
+              Err(e) => {
+                eprint!("Refresh failed: {:?}", e);
+                Some("log_in".to_string())
+              }
+            }
+          } else {
+            Some("".to_string()) // ??
+          }
+        }
+        Err(e) => match e {
+          EntryError::NoEntry => {
+            println!("No entry found.");
+            Some("log_in".to_string())
+          }
+          _ => {
+            panic!("Something went horribly wrong: {:?}", e)
+          }
+        },
+      };
+      *app.state::<Mutex<Option<String>>>().lock().unwrap() = decision;
+      match app.notification().permission_state() {
+        Ok(permission_state) => {
+          if permission_state != PermissionState::Granted {
+            let _ = app.notification().request_permission().unwrap();
+          }
+        }
+        Err(e) => {
+          println!("Error while trying to get permssion state: {:?}", e)
+        }
+      }
+
+      Ok(())
+    })
+    .on_page_load(|webview, _payload| {
+      let x = webview.app_handle();
+      let v = x
+        .try_state::<Mutex<Option<String>>>()
+        .unwrap()
+        .lock()
+        .unwrap()
+        .clone();
+
+      if v.is_some() {
+        set_window_position(
+          &webview.window().get_webview_window("main").unwrap(),
+        );
+        set_window_size(&webview.window().get_webview_window("main").unwrap());
+      }
+    })
+    .plugin(tauri_plugin_opener::init())
+    .plugin(tauri_plugin_positioner::init())
+    .plugin(tauri_plugin_notification::init())
+    .invoke_handler(tauri::generate_handler![
+      shutdown_server,
+      on_startup,
+      login,
+    ]);
+
+  let context = tauri::generate_context!();
+  #[allow(unused_mut)]
+  let mut app = builder.build(context).expect("Error while building app");
+
+  if let Some(token) = load_secret("access_token") {
+    let app_handle = app.handle().clone();
+    if let Err(e) = start_ws_client(app_handle, token) {
+      eprintln!("start_ws_client failed in thread: {:?}", e);
+    }
+  }
+
+  app.run(move |_app_handle, event| match event {
+    RunEvent::ExitRequested { .. } => {
+      if let Err(e) = stop_ws_client() {
+        panic!("Failed to stop the ws client. Error: {:?}", e);
+      }
+    }
+    _ => {}
+  });
 }
