@@ -1,10 +1,49 @@
 use reqwest::Client;
+use serde::Serialize;
 use serde_json::Value;
+
+#[derive(Serialize)]
+struct Broadcaster {
+  broadcaster_id: u64,
+}
+
+pub async fn register_streamers_webhook(token: String, user_id: String) {
+  let webhook_url = std::env::var("REGISTER_WEBHOOK_URI")
+    .expect("REGISTER_WEBHOOK_URI env not set");
+  let streamers: Vec<Broadcaster> =
+    match fetch_followed_streamers(&token, &user_id).await {
+      Ok(ids) => ids
+        .into_iter()
+        .filter_map(|s| {
+          s.parse::<u64>()
+            .ok()
+            .map(|id| Broadcaster { broadcaster_id: id })
+        })
+        .collect(),
+      Err(e) => panic!("{}", e),
+    };
+  let data =
+    serde_json::to_string(&streamers).expect("Failed to serialize json.");
+  let client = Client::new();
+  match client.post(webhook_url).body(data).send().await {
+    Ok(resp) => {
+      if !resp.status().is_success() {
+        eprintln!(
+          "Failed to register hook. Status: {}, Error: {}",
+          resp.status(),
+          resp.text().await.unwrap()
+        )
+      }
+    }
+    Err(e) => panic!("{}", e),
+  };
+}
 
 pub async fn fetch_followed_streamers(
   token: &str,
   user_id: &str,
 ) -> Result<Vec<String>, String> {
+  dotenvy::dotenv().ok();
   let client_id = std::env::var("CLIENT_ID")
     .map_err(|_| "CLIENT_ID env not set".to_string())?;
 

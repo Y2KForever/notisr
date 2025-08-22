@@ -41,7 +41,12 @@ pub fn shutdown_server(
 pub fn on_startup(
   state: tauri::State<'_, Mutex<Option<String>>>,
 ) -> Option<String> {
-  state.lock().unwrap().clone()
+  let current_state = state.lock().unwrap();
+  if current_state.is_none() {
+    Some("log_in".to_string())
+  } else {
+    current_state.clone()
+  }
 }
 
 #[tauri::command]

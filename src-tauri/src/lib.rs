@@ -24,6 +24,7 @@ use crate::command::{login, on_startup, shutdown_server, ServerCtl};
 use crate::oauth::{
   refresh_access_token, validate_access_token, verify_id_token,
 };
+use crate::twitch::register_streamers_webhook;
 use crate::util::load_secret;
 
 fn set_window_size(window: &WebviewWindow) {
@@ -148,12 +149,37 @@ fn handle_setup_user(
                         Err(e) => return Response::text(format!("id_token verify failed: {:?}", e)).with_status_code(400)
                     };
 
+                    let user_id = claims.sub.clone();
+
                     Entry::new("notisr", "id_token").expect("failed to create entry").set_secret(id_token_str.as_bytes()).expect("failed to set id_token to entry");
 
-                    if let Some(access_token) = token_val.get("access_token").and_then(|v| v.as_str()) {
-                        Entry::new("notisr", "access_token").unwrap()
-                            .set_secret(access_token.as_bytes()).unwrap();
-                    }
+                    let access_token = match token_val.get("access_token").and_then(|v| v.as_str()) {
+                      Some(token) => {token.to_owned()}
+                      None => panic!("Access token did not exist in json")
+                    };
+
+                    let access_token_cloned = access_token.clone();
+                    let user_cloned = user_id.clone();
+                    let app_cloned = app.clone();
+                    let access_token_ws = access_token.clone();
+
+                    Entry::new("notisr", "access_token").unwrap()
+                        .set_secret(access_token.as_bytes()).unwrap();
+
+                    tauri::async_runtime::spawn(async move {
+                      register_streamers_webhook(access_token_cloned, user_cloned).await;
+
+                      start_ws_client(app_cloned, access_token_ws)
+
+                    });
+
+                    tauri::async_runtime::spawn(async move {
+                      register_streamers_webhook(access_token_cloned, user_cloned).await;
+
+                      if let Err(e) = start_ws_client(app_cloned, access_token_ws){
+                        eprintln!("start_ws_client failed after registering webhook: {:?}", e)
+                      }
+                    });
 
                     Entry::new("notisr", "user_id").expect("Failed to create user_id entry").set_secret(claims.sub.as_bytes()).expect("failed to set user_id to entry");
 
@@ -226,23 +252,23 @@ pub fn run() {
           if refresh == true {
             let refresh_token = match load_secret("refresh_token") {
               Some(r) => r,
-              None => "log_in".to_string(),
+              None => "".to_string(),
             };
             match refresh_access_token(&refresh_token) {
               Ok(_) => None,
               Err(e) => {
                 eprint!("Refresh failed: {:?}", e);
-                Some("log_in".to_string())
+                None
               }
             }
           } else {
-            Some("".to_string()) // ??
+            None
           }
         }
         Err(e) => match e {
           EntryError::NoEntry => {
             println!("No entry found.");
-            Some("log_in".to_string())
+            None
           }
           _ => {
             panic!("Something went horribly wrong: {:?}", e)
