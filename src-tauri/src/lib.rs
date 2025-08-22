@@ -24,8 +24,7 @@ use crate::command::{login, on_startup, shutdown_server, ServerCtl};
 use crate::oauth::{
   refresh_access_token, validate_access_token, verify_id_token,
 };
-use crate::twitch::register_streamers_webhook;
-use crate::util::load_secret;
+use crate::util::{load_secret, spawn_new_user};
 
 fn set_window_size(window: &WebviewWindow) {
   let opt_monitor = window.current_monitor().unwrap();
@@ -166,20 +165,7 @@ fn handle_setup_user(
                     Entry::new("notisr", "access_token").unwrap()
                         .set_secret(access_token.as_bytes()).unwrap();
 
-                    tauri::async_runtime::spawn(async move {
-                      register_streamers_webhook(access_token_cloned, user_cloned).await;
-
-                      start_ws_client(app_cloned, access_token_ws)
-
-                    });
-
-                    tauri::async_runtime::spawn(async move {
-                      register_streamers_webhook(access_token_cloned, user_cloned).await;
-
-                      if let Err(e) = start_ws_client(app_cloned, access_token_ws){
-                        eprintln!("start_ws_client failed after registering webhook: {:?}", e)
-                      }
-                    });
+                    spawn_new_user(access_token_cloned, user_cloned, app_cloned, access_token_ws);
 
                     Entry::new("notisr", "user_id").expect("Failed to create user_id entry").set_secret(claims.sub.as_bytes()).expect("failed to set user_id to entry");
 
