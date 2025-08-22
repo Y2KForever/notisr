@@ -41,6 +41,9 @@ Parameters:
     Type: String
     Description: URL for Twitch channel endpoint
     Default: https://api.twitch.tv/helix/channels
+  AppsyncApiHost:
+    Type: String
+    Description: URL for Appsync API
 
 Resources:
   NotisrApi:
@@ -72,6 +75,7 @@ Resources:
                 - dynamodb:PutItem
                 - dynamodb:BatchGetItem
                 - dynamodb:BatchWriteItem
+                - dynamodb:Query
               Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${StreamerTableName}
             - Effect: Allow
               Action:
@@ -93,17 +97,23 @@ Resources:
         Variables:
           STREAMER_TABLE: !Ref StreamerTableName
           SECRET_ARN: !Ref TwitchSecretArn
+          APPSYNC_API_HOST: !Ref AppsyncApiHost
       Policies:
         - AWSLambdaBasicExecutionRole
         - Statement:
             - Effect: Allow
               Action:
                 - dynamodb:UpdateItem
+                - dynamodb:GetItem
               Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${StreamerTableName}
             - Effect: Allow
               Action:
                 - secretsmanager:GetSecretValue
               Resource: !Ref TwitchSecretArn
+            - Effect: Allow
+              Action:
+                - appsync:GraphQL
+              Resource: !Sub '${GraphQLApi.Arn}/*'
       Events:
         WebhookApi:
           Type: Api
@@ -147,18 +157,32 @@ Resources:
                   - dynamodb:UpdateItem
                 Resource: !GetAtt StreamerTable.Arn
 
+  AppsyncLambdaAuthorizer:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./target/lambda/appsync-authorize
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+                - appsync.amazonaws.com
+            Action: sts:AssumeRole
+
   GraphQLApi:
     Type: AWS::Serverless::GraphQLApi
     Properties:
       Name: NotisrGQLApi
       Auth:
-        Type: OPENID_CONNECT
-        OpenIDConnect:
-          Issuer: https://id.twitch.tv/oauth2
-          ClientId: !Ref TwitchClientId
-          IatTTL: 8640000
-          AuthTTL: 8640000
-      SchemaUri: ./schema.graphql
+        Type: AWS_LAMBDA
+        LambdaAuthorizer:
+          AuthorizerResultTtlInSeconds: 3600
+          AuthorizerUri: !GetAtt AppsyncLambdaAuthorizer.Arn
+        Additional:
+          - Type: AWS_IAM
+      SchemaUri: ./graphql/schema.graphql
       DataSources:
         DynamoDb:
           StreamerTableSource:
@@ -171,13 +195,19 @@ Resources:
             Name: APPSYNC_JS
             Version: 1.0.0
           DataSource: StreamerTableSource
-          CodeUri: ./appsync-functions/batchGetStreamers.js
+          CodeUri: ./graphql/functions/batchGetStreamers.js
         UpdateStreamer:
           Runtime:
             Name: APPSYNC_JS
             Version: 1.0.0
           DataSource: StreamerTableSource
-          CodeUri: ./appsync-functions/updateStreamer.js
+          CodeUri: ./graphql/functions/updateStreamer.js
+        FetchStreamer:
+          Runtime:
+            Name: APPSYNC_JS
+            Version: 1.0.0
+          DataSource: StreamerTableSource
+          CodeUri: ./graphql/functions/fetchStreamer.js
       Resolvers:
         Query:
           batchGetStreamers:
@@ -191,9 +221,15 @@ Resources:
             Runtime:
               Name: APPSYNC_JS
               Version: 1.0.0
-            CodeUri: ./appsync-functions/updateStreamer.js
             Pipeline:
               - UpdateStreamer
+        Subscription:
+          onUpdateStreamer:
+            Runtime:
+              Name: APPSYNC_JS
+              Version: 1.0.0
+            Pipeline:
+              - FetchStreamer
 
 Outputs:
   GraphQLApiUrl:

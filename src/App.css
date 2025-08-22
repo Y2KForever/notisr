@@ -124,4 +124,11 @@ body,
 #root {
   width: 100%;
   height: 100%;
+  font-family: Inter;
+}
+
+@font-face {
+  font-family: "Inter";
+  src: url("./assets/fonts/inter.ttf");
+  font-display: blockta;
 }
