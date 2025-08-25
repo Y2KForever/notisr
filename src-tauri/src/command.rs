@@ -8,14 +8,27 @@ use crate::{
   appsync::{update_token, ControlMsg},
   handle_setup_user,
   oauth::{gen_b64_url, generate_pkce_pair},
+  twitch::fetch_followed_streamers,
   util::load_secret,
 };
 use once_cell::sync::OnceCell;
-use serde_json::Value;
-use tauri::{AppHandle, Manager};
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::mpsc::UnboundedSender;
 use url::Url;
 use uuid::Uuid;
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Broadcasters {
+  broadcaster_id: String,
+  broadcaster_name: String,
+  category: String,
+  title: String,
+  #[serde(rename = "isLive")]
+  is_live: bool,
+}
 
 pub struct ServerCtl {
   pub stop_tx: Sender<()>,
@@ -45,7 +58,8 @@ pub fn on_startup(
   if current_state.is_none() {
     Some("log_in".to_string())
   } else {
-    current_state.clone()
+    // fetch streamers from ddb.
+    None
   }
 }
 
@@ -135,4 +149,60 @@ pub fn refresh_token_ws() -> Result<(), String> {
     }
     None => Err("Token doesn't exist".to_string()),
   }
+}
+
+#[tauri::command]
+pub fn fetch_streamers(app: AppHandle) {
+  dotenvy::dotenv().ok();
+  let base_uri = std::env::var("BASE_URI").unwrap_or_default();
+  let token = load_secret("access_token").unwrap_or_default();
+  let user_id = load_secret("user_id").unwrap_or_default();
+
+  if token.is_empty() || user_id.is_empty() {
+    eprintln!("Missing token or user_id");
+    return;
+  }
+
+  tauri::async_runtime::spawn(async move {
+    let broadcaster_ids = match fetch_followed_streamers(&token, &user_id).await
+    {
+      Ok(ids) => ids,
+      Err(e) => {
+        eprintln!("Failed to fetch followed streamers: {:?}", e);
+        return;
+      }
+    };
+
+    let client = Client::new();
+
+    let res = client
+      .post(format!("{}/streamers/fetch-all", base_uri))
+      .json(&broadcaster_ids)
+      .send()
+      .await;
+
+    let streamers = match res {
+      Ok(resp) => match resp.json::<Vec<Broadcasters>>().await {
+        Ok(s) => s,
+        Err(e) => {
+          eprintln!("Failed to deserialize JSON: {:?}", e);
+          return;
+        }
+      },
+      Err(e) => {
+        eprintln!("Failed to fetch streamers: {:?}", e);
+        return;
+      }
+    };
+
+    let (live, offline): (Vec<Broadcasters>, Vec<Broadcasters>) =
+      streamers.into_iter().partition(|b| b.is_live);
+
+    app
+      .emit(
+        "streamers:fetched",
+        json!({"online": live, "offline": offline}),
+      )
+      .unwrap_or_else(|e| eprintln!("Failed to emit event: {:?}", e));
+  });
 }

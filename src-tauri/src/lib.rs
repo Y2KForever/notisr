@@ -6,7 +6,7 @@ mod util;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use keyring::{Entry, Error as EntryError};
+use keyring::{Entry};
 use reqwest::blocking::Client as BlockingClient;
 use rouille::{router, Response, Server};
 use serde_json::Value;
@@ -20,11 +20,9 @@ use tauri::{
 use tauri_plugin_notification::{NotificationExt, PermissionState};
 
 use crate::appsync::{start_ws_client, stop_ws_client};
-use crate::command::{login, on_startup, shutdown_server, ServerCtl};
-use crate::oauth::{
-  refresh_access_token, validate_access_token, verify_id_token,
-};
-use crate::util::{load_secret, spawn_new_user};
+use crate::command::{login, on_startup, shutdown_server, ServerCtl, fetch_streamers};
+use crate::oauth::verify_id_token;
+use crate::util::{check_validitiy_token, spawn_new_user};
 
 fn set_window_size(window: &WebviewWindow) {
   let opt_monitor = window.current_monitor().unwrap();
@@ -165,7 +163,7 @@ fn handle_setup_user(
                     Entry::new("notisr", "access_token").unwrap()
                         .set_secret(access_token.as_bytes()).unwrap();
 
-                    spawn_new_user(access_token_cloned, user_cloned, app_cloned, access_token_ws);
+                    spawn_new_user(access_token_cloned, user_cloned, access_token_ws, app_cloned);
 
                     Entry::new("notisr", "user_id").expect("Failed to create user_id entry").set_secret(claims.sub.as_bytes()).expect("failed to set user_id to entry");
 
@@ -206,61 +204,7 @@ pub fn run() {
       let auth_state: Mutex<Option<String>> = Mutex::new(None);
       app.manage(auth_state);
 
-      // Switch out to utils.load_secret
-      let entry = Entry::new("notisr", "access_token").unwrap();
-      let mut refresh = false;
-
-      let decision = match entry.get_secret() {
-        Ok(access_token) => {
-          let access_token_str = str::from_utf8(&access_token).unwrap();
-          match validate_access_token(&access_token_str) {
-            Ok(Some(resp)) => {
-              if resp.expires_in.unwrap_or(0) > 0 {
-                Some(());
-              } else {
-                eprintln!(
-                  "Access token appears expired, attempting refresh..."
-                );
-                refresh = true;
-              }
-            }
-            Ok(None) => {
-              eprintln!(
-                "Access token invalid (401). Will try refresh if possible."
-              );
-              refresh = true;
-            }
-            Err(e) => {
-              eprintln!("validate error during setup: {:?}", e);
-              Some("log_in".to_string());
-            }
-          }
-          if refresh == true {
-            let refresh_token = match load_secret("refresh_token") {
-              Some(r) => r,
-              None => "".to_string(),
-            };
-            match refresh_access_token(&refresh_token) {
-              Ok(_) => None,
-              Err(e) => {
-                eprint!("Refresh failed: {:?}", e);
-                None
-              }
-            }
-          } else {
-            None
-          }
-        }
-        Err(e) => match e {
-          EntryError::NoEntry => {
-            println!("No entry found.");
-            None
-          }
-          _ => {
-            panic!("Something went horribly wrong: {:?}", e)
-          }
-        },
-      };
+      let decision = check_validitiy_token();
       *app.state::<Mutex<Option<String>>>().lock().unwrap() = decision;
       match app.notification().permission_state() {
         Ok(permission_state) => {
@@ -276,13 +220,7 @@ pub fn run() {
       Ok(())
     })
     .on_page_load(|webview, _payload| {
-      let x = webview.app_handle();
-      let v = x
-        .try_state::<Mutex<Option<String>>>()
-        .unwrap()
-        .lock()
-        .unwrap()
-        .clone();
+      let v = check_validitiy_token();
 
       if v.is_some() {
         set_window_position(
@@ -298,13 +236,16 @@ pub fn run() {
       shutdown_server,
       on_startup,
       login,
+      fetch_streamers
     ]);
 
   let context = tauri::generate_context!();
   #[allow(unused_mut)]
   let mut app = builder.build(context).expect("Error while building app");
 
-  if let Some(token) = load_secret("access_token") {
+  let valid_token = check_validitiy_token();
+
+  if let Some(token) = valid_token {
     let app_handle = app.handle().clone();
     if let Err(e) = start_ws_client(app_handle, token) {
       eprintln!("start_ws_client failed in thread: {:?}", e);

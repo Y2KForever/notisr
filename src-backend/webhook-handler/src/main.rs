@@ -84,18 +84,6 @@ async fn post_graphql_to_appsync(
         serde_json::to_vec(&body_json).map_err(|e| format!("json stringify err: {}", e))?;
 
     let (access_key, secret_key, session_token) = get_runtime_aws_credentials().await?;
-    let conf = aws_config::load_defaults(BehaviorVersion::latest()).await;
-
-    let sts_client = aws_sdk_sts::Client::new(&conf);
-
-    let id = sts_client.get_caller_identity().send().await.unwrap();
-
-    println!(
-        "Caller identity: arn={} account={} userId={}",
-        id.arn.unwrap_or_default(),
-        id.account.unwrap_or_default(),
-        id.user_id.unwrap_or_default()
-    );
 
     let creds = Credentials::new(access_key, secret_key, session_token, None, "appsync");
     let identity = creds.into();

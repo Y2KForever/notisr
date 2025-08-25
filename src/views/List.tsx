@@ -1,3 +1,4 @@
+import { Spinner } from '@/components/ui/spinner';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { useEffect, useRef, useState } from 'react';
 
@@ -9,7 +10,11 @@ type StreamerUpdate = {
   isLive: boolean;
 };
 
-export const List = () => {
+interface IListProps {
+  loading: boolean;
+}
+
+export const List = ({ loading }: IListProps) => {
   const [updates, setUpdates] = useState<StreamerUpdate[]>([]);
   const unlistenRef = useRef<UnlistenFn | null>(null);
   const startingRef = useRef(false);
@@ -52,14 +57,22 @@ export const List = () => {
 
   return (
     <>
-      {updates.length === 0 ? (
-        <p>List is empty.</p>
+      {loading ? (
+        <div className='flex flex-row justify-center'>
+          <Spinner variant="infinite" size={64} />
+        </div>
       ) : (
-        <ul>
-          {updates.map((u, i) => (
-            <li key={i}>{JSON.stringify(u)}</li>
-          ))}
-        </ul>
+        <>
+          {updates.length === 0 ? (
+            <p>List is empty.</p>
+          ) : (
+            <ul>
+              {updates.map((u, i) => (
+                <li key={i}>{JSON.stringify(u)}</li>
+              ))}
+            </ul>
+          )}
+        </>
       )}
     </>
   );

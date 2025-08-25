@@ -32,6 +32,7 @@ struct CachedJwks {
 }
 
 #[derive(Deserialize, Debug)]
+#[allow(dead_code)]
 pub struct ValidateResp {
   pub expires_in: Option<u64>,
 }
