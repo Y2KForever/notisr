@@ -6,32 +6,55 @@ import { LogIn } from './views/LogIn';
 import { List } from './views/List';
 import { Menu } from './components/Menu';
 
+type Broadcaster = {
+  broadcaster_id: string;
+  broadcaster_name: string;
+  category: string;
+  title: string;
+  is_live: boolean;
+};
+
+type Broadcasters = {
+  online: Broadcaster[];
+  offline: Broadcaster[];
+};
+
 export const App = () => {
   const [layout, setLayout] = useState<string>('list');
+  const [loading, setLoading] = useState<boolean>(true);
   useEffect(() => {
     invoke('on_startup').then((val) => {
       if (val === 'log_in') {
         setLayout('login');
+      } else {
+        invoke('fetch_streamers');
       }
     });
-  }, []);
+    let unlistenLoggedIn: UnlistenFn;
+    let unlistenStreamers: UnlistenFn;
 
-  useEffect(() => {
-    let unlisten: UnlistenFn;
     listen('logged_in', (_event) => {
       setLayout('list');
     }).then((fn) => {
-      unlisten = fn;
+      unlistenLoggedIn = fn;
+    });
+
+    listen('streamers:fetched', (event) => {
+      const { offline, online } = event.payload as Broadcasters;
+      setLoading(false);
+    }).then((fn) => {
+      unlistenStreamers = fn;
     });
     return () => {
-      unlisten && unlisten();
+      unlistenLoggedIn && unlistenLoggedIn();
+      unlistenStreamers && unlistenStreamers();
     };
-  });
+  }, []);
 
   return (
-    <div className="w-full h-full dark:bg-[#1f1f23] bg-[#efeff1]">
+    <div className="w-full h-full dark:bg-[#26262c] bg-[#efeff1] flex flex-col">
       <Menu />
-      {layout === 'login' ? <LogIn /> : layout === 'list' && <List />}
+      {layout === 'login' ? <LogIn /> : layout === 'list' && <List loading={loading} />}
     </div>
   );
 };

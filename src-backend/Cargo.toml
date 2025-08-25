@@ -2,6 +2,7 @@
 members = [
   "appsync-authorize",
   "webhook-handler",
-  "webhook-register"
+  "webhook-register",
+  "get-streamers"
 ]
 resolver = "2"

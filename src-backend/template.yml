@@ -115,11 +115,33 @@ Resources:
                 - appsync:GraphQL
               Resource: !Sub '${GraphQLApi.Arn}/*'
       Events:
-        WebhookApi:
+        WebhookHandlerEvent:
           Type: Api
           Properties:
             Path: /webhook
-            Method: post
+            Method: POST
+            RestApiId: !Ref NotisrApi
+
+  BatchGetStreamersFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./target/lambda/get-streamers
+      Environment:
+        Variables:
+          STREAMER_TABLE: !Ref StreamerTableName
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:BatchGetItem
+              Resource: !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${StreamerTableName}
+      Events:
+        StreamersFetchAllEvent:
+          Type: Api
+          Properties:
+            Path: /streamers/fetch-all
+            Method: POST
             RestApiId: !Ref NotisrApi
 
   StreamerTable:

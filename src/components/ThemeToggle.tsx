@@ -22,7 +22,7 @@ export function ThemeToggle({ style, hover, iconStyle, spacing }: ThemeTogglePro
   return (
     <Tooltip>
       <TooltipTrigger
-        className={`${hover ? 'hover:bg-accent' : undefined} flex fill-current items-center gap-3 rounded-lg ${
+        className={`${hover ? 'hover:bg-accent' : undefined} float-right mr-2 mt-1 flex fill-current items-center gap-3 rounded-lg ${
           spacing === PaddingSpacing.SMALL ? `px-1 py-1` : `px-3 py-2`
         } text-muted-foreground transition-all hover:fill-yellow-500 cursor-pointer`}
         onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}

@@ -4,7 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 
 export const LogIn = () => {
   return (
-    <div className="flex flex-col h-screen justify-center align-center">
+    <div className="flex flex-col h-screen justify-center align-center mt-[-36px]">
       <div className="flex justify-center">
         <Button
           onClick={() => {
