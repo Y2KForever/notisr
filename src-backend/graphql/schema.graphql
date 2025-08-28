@@ -4,17 +4,17 @@ type Streamer @aws_iam @aws_lambda {
   category: String!
   title: String!
   updated: AWSDateTime!
-  isLive: Boolean!
+  is_live: Boolean!
   type: String
+  profile_picture: String
 }
 
 type Mutation {
   updateStreamer(
     broadcaster_id: String!
-    broadcaster_name: String!
     category: String!
     title: String!
-    isLive: Boolean!
+    is_live: Boolean!
     updated: AWSDateTime!
     type: String
   ): Streamer! @aws_iam
