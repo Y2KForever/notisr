@@ -16,18 +16,19 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
+use tauri_plugin_opener::OpenerExt;
 use tokio::sync::mpsc::UnboundedSender;
 use url::Url;
 use uuid::Uuid;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Broadcasters {
-  broadcaster_id: String,
-  broadcaster_name: String,
-  category: String,
-  title: String,
-  #[serde(rename = "isLive")]
-  is_live: bool,
+  pub broadcaster_id: String,
+  pub broadcaster_name: String,
+  pub category: String,
+  pub title: String,
+  pub is_live: bool,
+  pub profile_picture: Option<String>,
 }
 
 pub struct ServerCtl {
@@ -195,8 +196,19 @@ pub fn fetch_streamers(app: AppHandle) {
       }
     };
 
-    let (live, offline): (Vec<Broadcasters>, Vec<Broadcasters>) =
+    let (mut live, mut offline): (Vec<Broadcasters>, Vec<Broadcasters>) =
       streamers.into_iter().partition(|b| b.is_live);
+
+    live.sort_by(|a, b| {
+      a.broadcaster_name
+        .to_lowercase()
+        .cmp(&b.broadcaster_name.to_lowercase())
+    });
+    offline.sort_by(|a, b| {
+      a.broadcaster_name
+        .to_lowercase()
+        .cmp(&b.broadcaster_name.to_lowercase())
+    });
 
     app
       .emit(
@@ -205,4 +217,13 @@ pub fn fetch_streamers(app: AppHandle) {
       )
       .unwrap_or_else(|e| eprintln!("Failed to emit event: {:?}", e));
   });
+}
+
+#[tauri::command]
+pub fn open_broadcaster_url(app: AppHandle, broadcaster_name: String) {
+  println!("Broadcaster: {:?}", broadcaster_name);
+  let _ = app.opener().open_url(
+    format!("https://twitch.tv/{}", broadcaster_name),
+    None::<&str>,
+  );
 }
