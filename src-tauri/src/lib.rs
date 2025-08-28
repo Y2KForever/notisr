@@ -6,7 +6,7 @@ mod util;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use keyring::{Entry};
+use keyring::Entry;
 use reqwest::blocking::Client as BlockingClient;
 use rouille::{router, Response, Server};
 use serde_json::Value;
@@ -20,7 +20,9 @@ use tauri::{
 use tauri_plugin_notification::{NotificationExt, PermissionState};
 
 use crate::appsync::{start_ws_client, stop_ws_client};
-use crate::command::{login, on_startup, shutdown_server, ServerCtl, fetch_streamers};
+use crate::command::{
+  login, on_startup, open_broadcaster_url, shutdown_server, ServerCtl, fetch_streamers
+};
 use crate::oauth::verify_id_token;
 use crate::util::{check_validitiy_token, spawn_new_user};
 
@@ -236,6 +238,7 @@ pub fn run() {
       shutdown_server,
       on_startup,
       login,
+      open_broadcaster_url,
       fetch_streamers
     ]);
 

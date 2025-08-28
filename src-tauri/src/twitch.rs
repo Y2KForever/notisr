@@ -1,15 +1,25 @@
 use reqwest::Client;
-use serde::Serialize;
-use serde_json::Value;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value};
 
 #[derive(Serialize)]
 struct Broadcaster {
   broadcaster_id: u64,
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Broadcasters {
+  pub broadcaster_id: String,
+  pub broadcaster_name: String,
+  pub category: String,
+  pub title: String,
+  pub is_live: bool,
+  pub profile_picture: Option<String>,
+}
+
 pub async fn register_streamers_webhook(token: String, user_id: String) {
-  let webhook_url = std::env::var("REGISTER_WEBHOOK_URI")
-    .expect("REGISTER_WEBHOOK_URI env not set");
+  let base_url = std::env::var("BASE_URI").expect("BASE_URI env not set");
+  let webhook_url = format!("{}/register", base_url);
   let streamers: Vec<Broadcaster> =
     match fetch_followed_streamers(&token, &user_id).await {
       Ok(ids) => ids
