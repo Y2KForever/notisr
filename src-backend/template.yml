@@ -41,6 +41,10 @@ Parameters:
     Type: String
     Description: URL for Twitch channel endpoint
     Default: https://api.twitch.tv/helix/channels
+  UsersUrl:
+    Type: String
+    Description: URL for Twitch users endpoint
+    Default: https://api.twitch.tv/helix/users
   AppsyncApiHost:
     Type: String
     Description: URL for Appsync API
@@ -65,6 +69,7 @@ Resources:
           TOKEN_URL: !Ref TokenUrl
           STREAMS_URL: !Ref StreamsUrl
           CHANNELS_URL: !Ref ChannelsUrl
+          USERS_URL: !Ref UsersUrl
       Policies:
         - AWSLambdaBasicExecutionRole
         - Statement:

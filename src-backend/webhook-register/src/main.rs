@@ -8,8 +8,8 @@ use chrono::Utc;
 use futures::future::join_all;
 use futures::FutureExt;
 use lambda_http::{run, service_fn, Body, Error, Request, Response};
-use reqwest::header::HeaderMap;
-use reqwest::header::CONTENT_TYPE;
+use reqwest::Url;
+use reqwest::{header::HeaderMap, header::CONTENT_TYPE, Client};
 use serde::{Deserialize, Serialize};
 
 const STREAMER_TABLE_ENV: &str = "STREAMER_TABLE";
@@ -19,6 +19,7 @@ const TOKEN_URL_ENV: &str = "TOKEN_URL";
 const SUBSCRIPTION_URL_ENV: &str = "SUBSCRIPTION_URL";
 const STREAMS_URL_ENV: &str = "STREAMS_URL";
 const CHANNELS_URL_ENV: &str = "CHANNELS_URL";
+const USERS_URL_ENV: &str = "USERS_URL";
 
 #[derive(Deserialize, Debug)]
 struct TwitchSecretConfig {
@@ -74,13 +75,14 @@ struct StreamInfo {
     title: String,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 struct Streams {
     user_id: String,
     user_name: String,
     game_name: String,
     is_live: bool,
     title: String,
+    profile_picture: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -94,6 +96,17 @@ struct Channels {
 #[derive(Serialize, Deserialize, Debug)]
 struct ChannelsResponse {
     data: Vec<Channels>,
+}
+
+#[derive(Deserialize)]
+struct UsersResponse {
+    data: Vec<Users>,
+}
+
+#[derive(Deserialize)]
+struct Users {
+    id: String,
+    profile_image_url: String,
 }
 
 async fn get_twitch_secret_config(
@@ -172,7 +185,7 @@ async fn ids_exist(
     let auth_response = match client.post(&token_url).query(&params).send().await {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("❌ Failed to send auth request: {:?}", e);
+            eprintln!("Failed to send auth request: {:?}", e);
             return Err(e.into());
         }
     };
@@ -194,7 +207,6 @@ async fn ids_exist(
             let headers = headers.clone();
             let token = auth_resp.access_token.clone();
             let id_str = broadcaster.broadcaster_id.to_string();
-            println!("broadcaster_id: {:?}", id_str);
             let streams_url = std::env::var(STREAMS_URL_ENV).expect("STREAMS_URL_ENV not set");
 
             async move {
@@ -218,6 +230,7 @@ async fn ids_exist(
 
     let res: Vec<(String, Result<reqwest::Response, reqwest::Error>)> = join_all(futures).await;
     let mut streams: Vec<Streams> = Vec::new();
+    let token = auth_resp.access_token.clone();
 
     for (i, (broadcaster_id, result)) in res.into_iter().enumerate() {
         match result {
@@ -238,10 +251,10 @@ async fn ids_exist(
                             user_name: item.user_name.to_string(),
                             is_live: if item.status == "live" { true } else { false },
                             title: item.title.to_string(),
+                            profile_picture: None,
                         });
                     }
                 } else {
-                    let token = auth_resp.access_token.clone();
                     let channels_url =
                         std::env::var(CHANNELS_URL_ENV).expect("CHANNELS_URL_ENV not set");
 
@@ -272,6 +285,7 @@ async fn ids_exist(
                             game_name: ch.game_name,
                             is_live: false,
                             title: ch.title,
+                            profile_picture: None,
                         });
                     }
                 }
@@ -280,6 +294,35 @@ async fn ids_exist(
                 eprintln!("Failed response: {:?}", err);
                 return Err(err.into());
             }
+        }
+    }
+
+    let users_url = std::env::var(USERS_URL_ENV).expect("USERS_URL_ENV not set");
+
+    let params: Vec<(&str, &str)> = streams.iter().map(|s| ("id", s.user_id.as_str())).collect();
+
+    let url = Url::parse_with_params(&users_url, params)?;
+
+    if streams.len() > 0 {
+        let client = Client::new();
+        let resp = client
+            .get(url)
+            .bearer_auth(&token)
+            .headers(headers.clone())
+            .send()
+            .await?;
+
+        println!("Resp: {:?}", resp);
+
+        let user_resp = resp.json::<UsersResponse>().await?;
+        let pictures: HashMap<_, _> = user_resp
+            .data
+            .into_iter()
+            .map(|p| (p.id, p.profile_image_url))
+            .collect();
+
+        for s in streams.iter_mut() {
+            s.profile_picture = pictures.get(&s.user_id).cloned()
         }
     }
 
@@ -309,7 +352,24 @@ async fn ids_exist(
                     "updated".to_string(),
                     AttributeValue::S(Utc::now().to_rfc3339()),
                 );
-                item.insert("isLive".to_string(), AttributeValue::Bool(streamer.is_live));
+                item.insert(
+                    "created".to_string(),
+                    AttributeValue::S(Utc::now().to_rfc3339()),
+                );
+                item.insert(
+                    "is_live".to_string(),
+                    AttributeValue::Bool(streamer.is_live),
+                );
+                item.insert(
+                    "profile_picture".to_string(),
+                    AttributeValue::S(
+                        streamer
+                            .profile_picture
+                            .clone()
+                            .unwrap_or("".to_string())
+                            .to_string(),
+                    ),
+                );
                 let put_req = PutRequest::builder().set_item(Some(item)).build();
                 WriteRequest::builder().put_request(put_req).build()
             })

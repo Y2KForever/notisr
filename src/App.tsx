@@ -5,19 +5,7 @@ import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { LogIn } from './views/LogIn';
 import { List } from './views/List';
 import { Menu } from './components/Menu';
-
-type Broadcaster = {
-  broadcaster_id: string;
-  broadcaster_name: string;
-  category: string;
-  title: string;
-  is_live: boolean;
-};
-
-type Broadcasters = {
-  online: Broadcaster[];
-  offline: Broadcaster[];
-};
+import { Separator } from '@/components/ui/separator';
 
 export const App = () => {
   const [layout, setLayout] = useState<string>('list');
@@ -31,30 +19,22 @@ export const App = () => {
       }
     });
     let unlistenLoggedIn: UnlistenFn;
-    let unlistenStreamers: UnlistenFn;
 
     listen('logged_in', (_event) => {
       setLayout('list');
     }).then((fn) => {
       unlistenLoggedIn = fn;
     });
-
-    listen('streamers:fetched', (event) => {
-      const { offline, online } = event.payload as Broadcasters;
-      setLoading(false);
-    }).then((fn) => {
-      unlistenStreamers = fn;
-    });
     return () => {
       unlistenLoggedIn && unlistenLoggedIn();
-      unlistenStreamers && unlistenStreamers();
     };
   }, []);
 
   return (
-    <div className="w-full h-full dark:bg-[#26262c] bg-[#efeff1] flex flex-col">
+    <div className="h-[100%] w-full dark:bg-[#26262c] bg-[#efeff1] flex flex-col">
       <Menu />
-      {layout === 'login' ? <LogIn /> : layout === 'list' && <List loading={loading} />}
+      <Separator className="mt-1 mb-2" />
+      {layout === 'login' ? <LogIn /> : layout === 'list' && <List setLoading={setLoading} loading={loading} />}
     </div>
   );
 };

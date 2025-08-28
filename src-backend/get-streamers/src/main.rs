@@ -29,7 +29,6 @@ async fn batch_get_chunk(
     table_name: String,
     keys: Vec<HashMap<String, AttributeValue>>,
 ) -> Result<Vec<HashMap<String, AttributeValue>>, String> {
-    // Build KeysAndAttributes (this API returns Result in this variant)
     let kaa = KeysAndAttributes::builder()
         .set_keys(Some(keys.clone()))
         .build()
@@ -50,7 +49,6 @@ async fn batch_get_chunk(
 
         match resp {
             Ok(output) => {
-                // collect returned items for our table
                 let mut returned: Vec<HashMap<String, AttributeValue>> = Vec::new();
                 if let Some(map) = output.responses() {
                     if let Some(items) = map.get(&table_name) {
@@ -58,18 +56,15 @@ async fn batch_get_chunk(
                     }
                 }
 
-                // Unprocessed keys handling
                 if let Some(unprocessed) = output.unprocessed_keys() {
                     if let Some(uka) = unprocessed.get(&table_name) {
                         if !uka.keys().is_empty() && attempt <= MAX_RETRIES {
                             let keys = uka.keys().to_owned();
                             for key in keys {
-                                let retry_kaa = KeysAndAttributes::builder()
-                                    .keys(key) // <-- no Option wrap
-                                    .build()
-                                    .map_err(|e| {
-                                        format!("retry KeysAndAttributes build error: {}", e)
-                                    })?;
+                                let retry_kaa =
+                                    KeysAndAttributes::builder().keys(key).build().map_err(
+                                        |e| format!("retry KeysAndAttributes build error: {}", e),
+                                    )?;
 
                                 let mut retry_map = HashMap::new();
                                 retry_map.insert(table_name.clone(), retry_kaa);
@@ -83,7 +78,6 @@ async fn batch_get_chunk(
                     }
                 }
 
-                // success
                 return Ok(returned);
             }
             Err(e) => {

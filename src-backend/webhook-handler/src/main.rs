@@ -5,7 +5,7 @@ use aws_config::BehaviorVersion;
 use aws_credential_types::provider::ProvideCredentials;
 use aws_credential_types::Credentials;
 use aws_sdk_dynamodb::types::AttributeValue;
-use aws_sdk_dynamodb::{Client as DynamoDbClient, Error as DynamoError};
+use aws_sdk_dynamodb::Client as DynamoDbClient;
 use aws_sdk_secretsmanager::Client as SecretsClient;
 use aws_sigv4::{
     http_request::{sign, SignableBody, SignableRequest, SigningSettings},
@@ -44,7 +44,6 @@ struct StreamEvent {
 #[derive(Deserialize, Debug)]
 struct ChannelUpdateEvent {
     broadcaster_user_id: String,
-    broadcaster_user_name: String,
     title: String,
     category_name: String,
 }
@@ -240,60 +239,11 @@ fn is_valid_signature(headers: &HeaderMap, secret: &str, body: &str) -> bool {
     valid
 }
 
-async fn update_streamer(
-    payload: &TwitchWebhookEvent,
-    ddb_client: &DynamoDbClient,
-    table_name: &str,
-) -> Result<(), DynamoError> {
-    let timestamp = Utc::now().to_rfc3339();
-
-    match payload.subscription.event_type.as_str() {
-        "stream.online" | "stream.offline" => {
-            let event: StreamEvent = serde_json::from_value(payload.event.clone()).unwrap();
-            let is_live = payload.subscription.event_type == "stream.online";
-
-            ddb_client
-                .update_item()
-                .table_name(table_name)
-                .key(
-                    "broadcaster_id",
-                    AttributeValue::S(event.broadcaster_user_id),
-                )
-                .update_expression("SET isLive = :live, updated = :ts")
-                .expression_attribute_values(":live", AttributeValue::Bool(is_live))
-                .expression_attribute_values(":ts", AttributeValue::S(timestamp.clone()))
-                .send()
-                .await?;
-        }
-        "channel.update" => {
-            let event: ChannelUpdateEvent = serde_json::from_value(payload.event.clone()).unwrap();
-
-            ddb_client
-                .update_item()
-                .table_name(table_name)
-                .key(
-                    "broadcaster_id",
-                    AttributeValue::S(event.broadcaster_user_id.clone()),
-                )
-                .update_expression("SET title = :title, category = :category, updated = :ts")
-                .expression_attribute_values(":title", AttributeValue::S(event.title))
-                .expression_attribute_values(":category", AttributeValue::S(event.category_name))
-                .expression_attribute_values(":ts", AttributeValue::S(timestamp))
-                .send()
-                .await?;
-        }
-        _ => {}
-    }
-
-    Ok(())
-}
-
 async fn get_streamer_item(
     ddb_client: &DynamoDbClient,
     table_name: &str,
     broadcaster_id: &str,
 ) -> Result<Option<(String, String, String, bool, String)>, String> {
-    println!("Broadcaster_id: {:?}", broadcaster_id);
     let resp = ddb_client
         .get_item()
         .table_name(table_name)
@@ -301,13 +251,11 @@ async fn get_streamer_item(
             "broadcaster_id",
             AttributeValue::S(broadcaster_id.to_string()),
         )
-        .projection_expression("broadcaster_name, title, category, isLive, updated")
         .send()
         .await
         .map_err(|e| format!("DDB GetItem error: {}", e))?;
 
     if let Some(item) = resp.item {
-        // extract attributes with reasonable fallbacks
         let name = item
             .get("broadcaster_name")
             .and_then(|v| v.as_s().ok())
@@ -327,7 +275,7 @@ async fn get_streamer_item(
             .unwrap_or_else(|| "".to_string());
 
         let is_live = item
-            .get("isLive")
+            .get("is_live")
             .and_then(|v| v.as_bool().ok())
             .unwrap_or(&false)
             .clone();
@@ -388,24 +336,18 @@ async fn function_handler(request: Request) -> Result<Response<Body>, Error> {
         }
     };
 
-    if let Err(e) = update_streamer(&payload, &ddb_client, &table_name).await {
-        eprintln!("DynamoDB update failed: {:?}", e);
-        return Ok(Response::builder().status(500).body(Body::Empty).unwrap());
-    }
-
     let variables: serde_json::Value = match payload.subscription.event_type.as_str() {
         "stream.online" | "stream.offline" => {
             let event: StreamEvent = serde_json::from_value(payload.event.clone()).unwrap();
             let is_live = payload.subscription.event_type == "stream.online";
 
             match get_streamer_item(&ddb_client, &table_name, &event.broadcaster_user_id).await {
-                Ok(Some((name, title, category, _old_live, updated))) => {
+                Ok(Some((_name, title, category, _old_live, updated))) => {
                     json!({
                         "broadcaster_id": event.broadcaster_user_id.clone(),
-                        "broadcaster_name": name,
                         "category": category,
                         "title": title,
-                        "isLive": is_live,
+                        "is_live": is_live,
                         "updated": updated,
                         "type": if is_live { "status" } else {"offline"}
                     })
@@ -413,10 +355,9 @@ async fn function_handler(request: Request) -> Result<Response<Body>, Error> {
                 Ok(None) => {
                     json!({
                         "broadcaster_id": event.broadcaster_user_id.clone(),
-                        "broadcaster_name": "",
                         "category": "",
                         "title": "",
-                        "isLive": is_live,
+                        "is_live": is_live,
                         "updated": Utc::now().to_rfc3339(),
                         "type": if is_live { "status" } else {"offline"}
                     })
@@ -435,10 +376,9 @@ async fn function_handler(request: Request) -> Result<Response<Body>, Error> {
                 Ok(Some((_name, _title, _category, existing_live, updated))) => {
                     json!({
                         "broadcaster_id": event.broadcaster_user_id.clone(),
-                        "broadcaster_name": event.broadcaster_user_name,
                         "category": event.category_name,
                         "title": event.title,
-                        "isLive": existing_live,
+                        "is_live": existing_live,
                         "updated": updated,
                         "type": "channel_updated"
                     })
@@ -446,10 +386,9 @@ async fn function_handler(request: Request) -> Result<Response<Body>, Error> {
                 Ok(None) => {
                     json!({
                         "broadcaster_id": event.broadcaster_user_id.clone(),
-                        "broadcaster_name": event.broadcaster_user_name,
                         "category": event.category_name,
                         "title": event.title,
-                        "isLive": false,
+                        "is_live": false,
                         "updated": Utc::now().to_rfc3339(),
                         "type": "channel_updated"
                     })
@@ -470,21 +409,20 @@ async fn function_handler(request: Request) -> Result<Response<Body>, Error> {
     };
 
     let mutation = r#"
-    mutation UpdateStreamer($broadcaster_id: String!, $broadcaster_name: String!, $category: String!, $title: String!, $isLive: Boolean!, $updated: AWSDateTime!, $type: String!) {
+    mutation UpdateStreamer($broadcaster_id: String!, $category: String!, $title: String!, $is_live: Boolean!, $updated: AWSDateTime!, $type: String!) {
     updateStreamer(
         broadcaster_id: $broadcaster_id,
-        broadcaster_name: $broadcaster_name,
         category: $category,
         title: $title,
-        isLive: $isLive,
-        updated: $updated
+        is_live: $is_live,
+        updated: $updated,
         type: $type
     ) {
             broadcaster_id
             broadcaster_name
             category
             title
-            isLive
+            is_live
             updated
             type
         }
