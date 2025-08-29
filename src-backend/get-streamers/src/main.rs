@@ -172,8 +172,6 @@ async fn function_handler(request: Request) -> Result<Response<Body>, Error> {
                 json_map.insert(k.clone(), attr_to_json(v));
             }
             out.push(Some(json_map));
-        } else {
-            out.push(None);
         }
     }
 
