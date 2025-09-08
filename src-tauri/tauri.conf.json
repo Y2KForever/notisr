@@ -15,18 +15,15 @@
         "title": "Notisr",
         "width": 800,
         "height": 600,
-        "minWidth": 250.0
+        "minWidth": 250.0,
+        "minHeight": 100.0
       }
     ],
     "security": {
       "csp": {
-        "default-src": "'self' customprotocol: asset:"
-      },
-      "assetProtocol": {
-        "enable": true,
-        "scope": {
-          "allow": ["$RESOURCE/**"]
-        }
+        "default-src": "'self' customprotocol: asset:",
+        "connect-src": "ipc: http://localhost",
+        "img-src": "'self' https://static-cdn.jtvnw.net"
       }
     }
   },
