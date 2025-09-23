@@ -1,10 +1,11 @@
+use dotenvy_macro::dotenv;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value};
+use serde_json::Value;
 
 #[derive(Serialize)]
-struct Broadcaster {
-  broadcaster_id: u64,
+pub struct Broadcaster {
+  pub broadcaster_id: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -17,21 +18,9 @@ pub struct Broadcasters {
   pub profile_picture: Option<String>,
 }
 
-pub async fn register_streamers_webhook(token: String, user_id: String) {
-  let base_url = std::env::var("BASE_URI").expect("BASE_URI env not set");
+pub async fn register_streamers_webhook(streamers: Vec<Broadcaster>) {
+  let base_url = dotenv!("BASE_URI");
   let webhook_url = format!("{}/register", base_url);
-  let streamers: Vec<Broadcaster> =
-    match fetch_followed_streamers(&token, &user_id).await {
-      Ok(ids) => ids
-        .into_iter()
-        .filter_map(|s| {
-          s.parse::<u64>()
-            .ok()
-            .map(|id| Broadcaster { broadcaster_id: id })
-        })
-        .collect(),
-      Err(e) => panic!("{}", e),
-    };
   let data =
     serde_json::to_string(&streamers).expect("Failed to serialize json.");
   let client = Client::new();
@@ -53,9 +42,7 @@ pub async fn fetch_followed_streamers(
   token: &str,
   user_id: &str,
 ) -> Result<Vec<String>, String> {
-  dotenvy::dotenv().ok();
-  let client_id = std::env::var("CLIENT_ID")
-    .map_err(|_| "CLIENT_ID env not set".to_string())?;
+  let client_id = dotenv!("CLIENT_ID");
 
   let client = Client::builder()
     .build()
@@ -76,7 +63,7 @@ pub async fn fetch_followed_streamers(
 
     let resp = client
       .get(&url)
-      .header("Client-Id", client_id.clone())
+      .header("Client-Id", client_id)
       .header("Authorization", format!("Bearer {}", token))
       .send()
       .await

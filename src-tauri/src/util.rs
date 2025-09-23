@@ -2,7 +2,10 @@ use keyring::Entry;
 use tauri::AppHandle;
 
 use crate::{
-  appsync::start_ws_client, command::fetch_streamers, oauth::{refresh_access_token, validate_access_token}, twitch::register_streamers_webhook
+  appsync::start_ws_client,
+  command::fetch_streamers,
+  oauth::{refresh_access_token, validate_access_token},
+  twitch::{fetch_followed_streamers, register_streamers_webhook, Broadcaster},
 };
 
 pub fn load_secret(name: &str) -> Option<String> {
@@ -20,7 +23,19 @@ pub fn spawn_new_user(
   app: AppHandle,
 ) {
   tauri::async_runtime::spawn(async move {
-    register_streamers_webhook(access_token, user).await;
+    let streamers: Vec<Broadcaster> =
+      match fetch_followed_streamers(&access_token, &user).await {
+        Ok(ids) => ids
+          .into_iter()
+          .filter_map(|s| {
+            s.parse::<u64>()
+              .ok()
+              .map(|id| Broadcaster { broadcaster_id: id })
+          })
+          .collect(),
+        Err(e) => panic!("{}", e),
+      };
+    register_streamers_webhook(streamers).await;
     fetch_streamers(app.clone());
 
     if let Err(e) = start_ws_client(app, token_ws) {

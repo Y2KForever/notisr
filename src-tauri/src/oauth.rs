@@ -1,5 +1,6 @@
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use dotenvy_macro::dotenv;
 use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
 use keyring::Entry;
 use once_cell::sync::Lazy;
@@ -223,31 +224,12 @@ pub fn validate_access_token(
 pub fn refresh_access_token(
   refresh_token: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync + 'static>> {
-  dotenvy::dotenv().ok();
-  let client_id = match std::env::var("CLIENT_ID") {
-    Ok(v) => v,
-    Err(e) => {
-      eprintln!("CLIENT_ID not set: {:?}", e);
-      return Err(Box::new(std::io::Error::new(
-        std::io::ErrorKind::PermissionDenied,
-        format!("CLIENT_ID not set"),
-      )));
-    }
-  };
-  let client_secret = match std::env::var("CLIENT_SECRET") {
-    Ok(v) => v,
-    Err(e) => {
-      eprintln!("CLIENT_SECRET not set: {:?}", e);
-      return Err(Box::new(std::io::Error::new(
-        std::io::ErrorKind::PermissionDenied,
-        format!("CLIENT_SECRET not set"),
-      )));
-    }
-  };
+  let client_id = dotenv!("CLIENT_ID");
+  let client_secret = dotenv!("CLIENT_SECRET");
 
   let params = [
-    ("client_id", client_id.as_str()),
-    ("client_secret", client_secret.as_str()),
+    ("client_id", client_id),
+    ("client_secret", client_secret),
     ("grant_type", "refresh_token"),
     ("refresh_token", refresh_token),
   ];

@@ -11,6 +11,7 @@ use crate::{
   twitch::fetch_followed_streamers,
   util::load_secret,
 };
+use dotenvy_macro::dotenv;
 use once_cell::sync::OnceCell;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -66,11 +67,9 @@ pub fn on_startup(
 
 #[tauri::command]
 pub fn login(app: AppHandle) {
-  dotenvy::dotenv().ok();
-  let client_id = std::env::var("CLIENT_ID").expect("CLIENT_ID env not set");
-  let redirect_uri =
-    std::env::var("REDIRECT_URI").expect("REDIRECT_URI env not set");
-  let scope = std::env::var("SCOPE").expect("SCOPE env not set");
+  let client_id = dotenv!("CLIENT_ID");
+  let redirect_uri = dotenv!("REDIRECT_URI");
+  let scope = dotenv!("SCOPE");
 
   let (pkce_challenge, pkce_verifier) = generate_pkce_pair();
   let csrf_state = gen_b64_url();
@@ -154,8 +153,7 @@ pub fn refresh_token_ws() -> Result<(), String> {
 
 #[tauri::command]
 pub fn fetch_streamers(app: AppHandle) {
-  dotenvy::dotenv().ok();
-  let base_uri = std::env::var("BASE_URI").unwrap_or_default();
+  let base_uri = dotenv!("BASE_URI");
   let token = load_secret("access_token").unwrap_or_default();
   let user_id = load_secret("user_id").unwrap_or_default();
 
