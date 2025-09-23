@@ -6,6 +6,7 @@ mod util;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use dotenvy_macro::dotenv;
 use keyring::Entry;
 use reqwest::blocking::Client as BlockingClient;
 use rouille::{router, Response, Server};
@@ -21,7 +22,8 @@ use tauri_plugin_notification::{NotificationExt, PermissionState};
 
 use crate::appsync::{start_ws_client, stop_ws_client};
 use crate::command::{
-  login, on_startup, open_broadcaster_url, shutdown_server, ServerCtl, fetch_streamers
+  fetch_streamers, login, on_startup, open_broadcaster_url, shutdown_server,
+  ServerCtl,
 };
 use crate::oauth::verify_id_token;
 use crate::util::{check_validitiy_token, spawn_new_user};
@@ -105,17 +107,17 @@ fn handle_setup_user(
                     lock.take().expect("PKCE verifier already consumed")
                 };
 
-                let client_id = std::env::var("CLIENT_ID").expect("CLIENT_ID env not set");
-                let client_secret = std::env::var("CLIENT_SECRET").expect("CLIENT_SECRET env not set");
-                let redirect_uri = std::env::var("REDIRECT_URI").expect("REDIRECT_URI env not set");
+                let client_id = dotenv!("CLIENT_ID");
+                let client_secret = dotenv!("CLIENT_SECRET");
+                let redirect_uri = dotenv!("REDIRECT_URI");
 
                 let http_client = BlockingClient::new();
                 let params = [
-                    ("client_id", client_id.as_str()),
-                    ("client_secret", client_secret.as_str()),
+                    ("client_id", client_id),
+                    ("client_secret", client_secret),
                     ("grant_type", "authorization_code"),
                     ("code", code.as_str()),
-                    ("redirect_uri", redirect_uri.as_str()),
+                    ("redirect_uri", redirect_uri),
                     ("code_verifier", verifier.as_str()),
                 ];
 

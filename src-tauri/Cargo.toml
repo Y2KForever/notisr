@@ -39,5 +39,6 @@ futures-util = "0.3"
 uuid = { version = "1", features = ["v4"] }
 http = "0.2"
 tauri-plugin-notification = "2"
+dotenvy_macro = "0.15.7"
 
 

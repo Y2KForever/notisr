@@ -1,4 +1,5 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use dotenvy_macro::dotenv;
 use futures_util::{SinkExt, StreamExt};
 use http::Request;
 use rand::Rng;
@@ -18,7 +19,9 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::oauth::refresh_access_token;
-use crate::twitch::fetch_followed_streamers;
+use crate::twitch::{
+  fetch_followed_streamers, register_streamers_webhook, Broadcaster,
+};
 
 #[derive(Debug)]
 pub enum ControlMsg {
@@ -147,11 +150,8 @@ async fn worker_loop(
 ) -> Result<(), String> {
   println!("Worker loop started");
 
-  dotenvy::dotenv().ok();
-  let http_uri = std::env::var("APPSYNC_HTTP_URI")
-    .map_err(|_| "APPSYNC_HTTP_URI env required".to_string())?;
-  let realtime_uri = std::env::var("APPSYNC_REALTIME_URI")
-    .map_err(|_| "APPSYNC_REALTIME_URI env required".to_string())?;
+  let http_uri = dotenv!("APPSYNC_HTTP_URI");
+  let realtime_uri = dotenv!("APPSYNC_REALTIME_URI");
   let ws_path = "/graphql";
   let appsync_proto = "graphql-ws";
 
@@ -195,7 +195,7 @@ async fn worker_loop(
     .get_webview_window("main")
     .ok_or_else(|| "no main window".to_string())?;
 
-  let mut reload_interval = tokio::time::interval(Duration::from_secs(300));
+  let mut reload_interval = tokio::time::interval(Duration::from_secs(180));
   reload_interval
     .set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
@@ -337,54 +337,73 @@ async fn worker_loop(
                 }
 
                  _ = reload_interval.tick() => {
+                    println!("New tick");
                     let current_token = { let tk = token.read().await; tk.clone() };
-
                     match fetch_followed_streamers(&current_token, &user_id).await {
-                        Ok(new_ids_vec) => {
-                            let new_ids: HashSet<String> = new_ids_vec.into_iter().collect();
-                            let current_ids: HashSet<String> = broadcaster_to_uuid.keys().cloned().collect();
-                            for bid in new_ids.difference(&current_ids).cloned().collect::<Vec<_>>() {
-                                let uuid = Uuid::new_v4().to_string();
-                                let query = subscription_query();
-                                let vars = json!({"broadcaster_id": bid.clone()});
-                                subs.insert(uuid.clone(), (query.clone(), vars.clone()));
-                                broadcaster_to_uuid.insert(bid.clone(), uuid.clone());
+                      Ok(new_ids_vec) => {
+                        let new_ids: HashSet<String> = new_ids_vec.into_iter().collect();
+                        let current_ids: HashSet<String> = broadcaster_to_uuid.keys().cloned().collect();
+                        let added: Vec<String> = new_ids.difference(&current_ids).cloned().collect();
+                        let mut broadcasters: Vec<Broadcaster> = Vec::new();
+                        let mut valid_added: Vec<String> = Vec::new();
 
-                                if connected {
-                                    let data_obj = json!({
-                                        "query": query,
-                                        "variables": vars
-                                    });
-                                    let data_str = serde_json::to_string(&data_obj).unwrap();
-                                    let start = json!({
-                                        "id": uuid,
-                                        "type": "start",
-                                        "payload": {
-                                            "data": data_str,
-                                            "extensions": {
-                                                "authorization": {
-                                                    "Authorization": format!("Bearer {}", current_token),
-                                                    "host": http_uri
-                                                }
-                                            }
-                                        },
-                                    }).to_string();
-                                    pending_subscriptions.insert(uuid.clone());
-                                    let _ = write.send(Message::Text(start)).await;
+                        for s in &added {
+                            match s.parse::<u64>() {
+                                Ok(id) => {
+                                    broadcasters.push(Broadcaster { broadcaster_id: id });
+                                    valid_added.push(s.clone());
                                 }
-                            }
-                            for bid in current_ids.difference(&new_ids).cloned().collect::<Vec<_>>() {
-                                if let Some(uuid) = broadcaster_to_uuid.remove(&bid) {
-                                    subs.remove(&uuid);
-                                    pending_subscriptions.remove(&uuid);
-
-                                    if connected {
-                                        let stop = serde_json::json!({ "id": uuid, "type": "stop" }).to_string();
-                                        let _ = write.send(Message::Text(stop)).await;
-                                    }
+                                Err(e) => {
+                                    eprintln!("Skipping invalid broadcaster id '{}': {}", s, e);
                                 }
                             }
                         }
+
+                        if !broadcasters.is_empty() {
+                          register_streamers_webhook(broadcasters).await;
+                        }
+                        for bid in valid_added {
+                            let uuid = Uuid::new_v4().to_string();
+                            let query = subscription_query();
+                            let vars = json!({ "broadcaster_id": bid.clone() });
+                            subs.insert(uuid.clone(), (query.clone(), vars.clone()));
+                            broadcaster_to_uuid.insert(bid.clone(), uuid.clone());
+
+                            if connected {
+                                let data_obj = json!({
+                                    "query": query,
+                                    "variables": vars
+                                });
+                                let data_str = serde_json::to_string(&data_obj).unwrap();
+                                let start = json!({
+                                    "id": uuid,
+                                    "type": "start",
+                                    "payload": {
+                                        "data": data_str,
+                                        "extensions": {
+                                            "authorization": {
+                                                "Authorization": format!("Bearer {}", current_token),
+                                                "host": http_uri
+                                            }
+                                        }
+                                    },
+                                }).to_string();
+                                pending_subscriptions.insert(uuid.clone());
+                                let _ = write.send(Message::Text(start)).await;
+                            }
+                        }
+                        for bid in current_ids.difference(&new_ids).cloned().collect::<Vec<_>>() {
+                            if let Some(uuid) = broadcaster_to_uuid.remove(&bid) {
+                                subs.remove(&uuid);
+                                pending_subscriptions.remove(&uuid);
+
+                                if connected {
+                                    let stop = serde_json::json!({ "id": uuid, "type": "stop" }).to_string();
+                                    let _ = write.send(Message::Text(stop)).await;
+                                }
+                            }
+                        }
+                    }
                         Err(e) => {
                             eprintln!("Failed reload fetch_followed_streamers: {}", e);
                         }
@@ -480,6 +499,7 @@ async fn worker_loop(
                                         "data" | "next" => {
                                             println!("data recieved");
                                             let payload_val = v.get("payload").cloned().unwrap_or(Value::Null);
+                                            println!("{:?}", payload_val);
                                             let streamer_obj = payload_val
                                                 .get("data")
                                                 .and_then(|d| d.get("onUpdateStreamer"))
