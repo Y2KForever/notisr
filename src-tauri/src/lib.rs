@@ -14,9 +14,14 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{
+  MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent,
+};
+use tauri::webview::PageLoadEvent;
 use tauri::{
   AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, RunEvent,
-  WebviewWindow,
+  WebviewUrl, WebviewWindow, WindowEvent,
 };
 use tauri_plugin_notification::{NotificationExt, PermissionState};
 
@@ -205,6 +210,73 @@ pub fn run() {
   let builder = tauri::Builder::default()
     .plugin(tauri_plugin_notification::init())
     .setup(|app| {
+      let show_menu_on_left_click = cfg!(target_os = "macos");
+
+      let quit_item =
+        MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+      let show_item =
+        MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
+
+      let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+
+      let _ = TrayIconBuilder::new()
+        .on_menu_event(|app, event| match event.id.as_ref() {
+          "show" => {
+            if let Some(window) = app.get_webview_window("main") {
+              let _ = window.show();
+              let _ = window.set_focus();
+            } else {
+              let monitors = app.available_monitors().unwrap();
+              let x = ((monitors[0].size().width as f64)
+                / monitors[0].scale_factor())
+                - 250.0;
+              let y = 0.0;
+              let height = monitors[0].size().height as f64;
+              let _webview = tauri::WebviewWindowBuilder::new(
+                app,
+                "main",
+                WebviewUrl::App("index.html".into()),
+              )
+              .title("Notisr")
+              .position(x, y)
+              .inner_size(250.0, height)
+              .visible(false)
+              .on_page_load(|window, payload| {
+                if payload.event() == PageLoadEvent::Finished {
+                  let _ = window.show();
+                  let _ = window.set_focus();
+                }
+              })
+              .build()
+              .unwrap();
+            }
+          }
+          "quit" => app.exit(0),
+          _ => {}
+        })
+        .menu(&menu)
+        .show_menu_on_left_click(show_menu_on_left_click)
+        .icon(app.default_window_icon().unwrap().clone())
+        .on_tray_icon_event(|tray, event| match event {
+          TrayIconEvent::Click {
+            button: MouseButton::Left,
+            button_state: MouseButtonState::Up,
+            ..
+          } => {
+            #[cfg(target_os = "macos")]
+            {
+              let app = tray.app_handle();
+              if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+              }
+            }
+          }
+          _ => {}
+        })
+        .build(app)?;
+
       let auth_state: Mutex<Option<String>> = Mutex::new(None);
       app.manage(auth_state);
 
@@ -257,7 +329,17 @@ pub fn run() {
     }
   }
 
-  app.run(move |_app_handle, event| match event {
+  app.run(move |app_handle, event| match event {
+    RunEvent::WindowEvent { label, event, .. } => {
+      if label == "main" {
+        if let WindowEvent::CloseRequested { api, .. } = event {
+          api.prevent_close();
+          if let Some(win) = app_handle.get_webview_window("main") {
+            let _ = win.hide();
+          }
+        }
+      }
+    }
     RunEvent::ExitRequested { .. } => {
       if let Err(e) = stop_ws_client() {
         panic!("Failed to stop the ws client. Error: {:?}", e);
