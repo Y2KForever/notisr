@@ -82,20 +82,24 @@ export const List = ({ loading, setLoading }: IListProps) => {
         </div>
       ) : (
         <div id="broadcasters" className="flex flex-col ml-2">
-          {state.online.map((streamer) => (
-            <div key={streamer.broadcaster_id} className="flex w-full">
-              <div className="flex-1 min-w-0">
-                <Broadcaster {...streamer} />
+          {state.online
+            .sort((a, b) => a.broadcaster_name.localeCompare(b.broadcaster_name))
+            .map((streamer) => (
+              <div key={streamer.broadcaster_id} className="flex w-full">
+                <div className="flex-1 min-w-0">
+                  <Broadcaster {...streamer} />
+                </div>
+                <div className="flex-shrink-0 content-center mr-2 mb-3 mt-2">
+                  <Live />
+                </div>
               </div>
-              <div className="flex-shrink-0 content-center mr-2 mb-3 mt-2">
-                <Live />
-              </div>
-            </div>
-          ))}
+            ))}
           <Separator />
-          {state.offline.map((streamer) => (
-            <Broadcaster key={streamer.broadcaster_id} {...streamer} />
-          ))}
+          {state.offline
+            .sort((a, b) => a.broadcaster_name.localeCompare(b.broadcaster_name))
+            .map((streamer) => (
+              <Broadcaster key={streamer.broadcaster_id} {...streamer} />
+            ))}
         </div>
       )}
     </div>
