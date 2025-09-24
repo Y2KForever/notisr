@@ -316,7 +316,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: app-v__VERSION__
-          releaseName: 'App v__VERSION__'
+          releaseName: 'Notisr v__VERSION__'
           releaseBody: |
             ${{ needs.generate-changelog.outputs.changelog_content }}
           releaseDraft: true
