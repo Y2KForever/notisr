@@ -40,5 +40,8 @@ uuid = { version = "1", features = ["v4"] }
 http = "0.2"
 tauri-plugin-notification = "2"
 dotenvy_macro = "0.15.7"
+tauri-plugin-updater = "2.9.0"
+tauri-plugin-dialog = "2.4.0"
+tauri-plugin-process = "2.3.0"
 
 
