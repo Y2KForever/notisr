@@ -94,16 +94,30 @@ jobs:
         run: |
           # Get previous and current tags
           CURRENT_TAG="${{ github.ref_name }}"
+
+          # Try to get the previous tag, but handle the case where it doesn't exist
           PREVIOUS_TAG=$(git describe --tags --abbrev=0 $(git rev-list --tags --skip=1 --max-count=1) 2>/dev/null || echo "")
+          echo "Current tag: $CURRENT_TAG"
+          echo "Previous tag: $PREVIOUS_TAG"
 
           if [ -z "$PREVIOUS_TAG" ]; then
-            COMMIT_RANGE=$(git rev-list --max-parents=0 HEAD)
+            echo "No previous tag found - this is the first release"
+            # Get all commits from the beginning
+            COMMIT_RANGE=""
           else
             COMMIT_RANGE="$PREVIOUS_TAG..HEAD"
           fi
+          echo "Commit range: $COMMIT_RANGE"
 
           # Get merge commits with PR numbers
-          MERGE_COMMITS=$(git log --oneline --merges $COMMIT_RANGE | grep -oP 'Merge pull request #\K\d+')
+          if [ -z "$COMMIT_RANGE" ]; then
+            # First release - get all merge commits
+            MERGE_COMMITS=$(git log --oneline --merges | grep -oP 'Merge pull request #\K\d+' || echo "")
+          else
+            MERGE_COMMITS=$(git log --oneline --merges $COMMIT_RANGE | grep -oP 'Merge pull request #\K\d+' || echo "")
+          fi
+
+          echo "Found merge commits: $MERGE_COMMITS"
 
           # Initialize categories
           FEATURES=""
@@ -111,74 +125,93 @@ jobs:
           MAINTENANCE=""
           OTHER=""
 
-          for PR_NUM in $MERGE_COMMITS; do
-            PR_INFO=$(gh pr view $PR_NUM --json title,labels --jq '[.title, (.labels | map(.name) | join(","))]' 2>/dev/null || echo "")
+          # If no merge commits found, provide a default message
+          if [ -z "$MERGE_COMMITS" ]; then
+            echo "No merge commits found in the range"
+            CHANGELOG_CONTENT="# $CURRENT_TAG ($(date +%Y-%m-%d))"$'\n\n'
+            CHANGELOG_CONTENT="${CHANGELOG_CONTENT}Initial release."
+          else
+            for PR_NUM in $MERGE_COMMITS; do
+              echo "Processing PR #$PR_NUM"
+              PR_INFO=$(gh pr view $PR_NUM --json title,labels --jq '[.title, (.labels | map(.name) | join(","))]' 2>/dev/null || echo "")
 
-            if [ -n "$PR_INFO" ]; then
-              IFS=$'\t' read -r TITLE LABELS <<< "$(echo "$PR_INFO" | sed 's/\[\"\(.*\)\",\"\(.*\)\"\]/\1\t\2/')"
+              if [ -n "$PR_INFO" ]; then
+                IFS=$'\t' read -r TITLE LABELS <<< "$(echo "$PR_INFO" | sed 's/\[\"\(.*\)\",\"\(.*\)\"\]/\1\t\2/' 2>/dev/null || echo -e "\t")"
 
-              # Skip version bump PRs (both by label and title pattern)
-              if echo "$LABELS" | grep -qi "version-bump" || \
-                 echo "$TITLE" | grep -qiE "chore.*bump.*version|bump.*version|version.*bump|release.*v[0-9]"; then
-                echo "Skipping version bump PR: #$PR_NUM - $TITLE"
-                continue
+                # Skip version bump PRs (both by label and title pattern)
+                if echo "$LABELS" | grep -qi "version-bump" || \
+                  echo "$TITLE" | grep -qiE "chore.*bump.*version|bump.*version|version.*bump|release.*v[0-9]"; then
+                  echo "Skipping version bump PR: #$PR_NUM - $TITLE"
+                  continue
+                fi
+
+                # Determine category
+                CATEGORY="other"
+
+                # Check labels first, then title
+                if echo "$LABELS" | grep -qi "feat\|feature"; then
+                  CATEGORY="feat"
+                elif echo "$LABELS" | grep -qi "fix\|bug"; then
+                  CATEGORY="fix"
+                elif echo "$LABELS" | grep -qi "maint\|maintenance\|chore\|docs"; then
+                  CATEGORY="maint"
+                elif echo "$TITLE" | grep -qi "^feat:"; then
+                  CATEGORY="feat"
+                elif echo "$TITLE" | grep -qi "^fix:"; then
+                  CATEGORY="fix"
+                elif echo "$TITLE" | grep -qi "^maint:\|^chore:\|^docs:"; then
+                  CATEGORY="maint"
+                fi
+
+                # Create link to PR
+                PR_LINK="([#${PR_NUM}](https://github.com/${{ github.repository }}/pull/${PR_NUM}))"
+
+                case $CATEGORY in
+                  "feat")
+                    FEATURES="${FEATURES}- ${TITLE} ${PR_LINK}"$'\n'
+                    ;;
+                  "fix")
+                    FIXES="${FIXES}- ${TITLE} ${PR_LINK}"$'\n'
+                    ;;
+                  "maint")
+                    MAINTENANCE="${MAINTENANCE}- ${TITLE} ${PR_LINK}"$'\n'
+                    ;;
+                  *)
+                    OTHER="${OTHER}- ${TITLE} ${PR_LINK}"$'\n'
+                    ;;
+                esac
+              else
+                echo "Could not get info for PR #$PR_NUM"
               fi
+            done
 
-              # Determine category
-              CATEGORY="other"
+            CHANGELOG_CONTENT="# $CURRENT_TAG ($(date +%Y-%m-%d))"$'\n\n'
 
-              # Check labels first, then title
-              if echo "$LABELS" | grep -qi "feat\|feature"; then
-                CATEGORY="feat"
-              elif echo "$LABELS" | grep -qi "fix\|bug"; then
-                CATEGORY="fix"
-              elif echo "$LABELS" | grep -qi "maint\|maintenance\|chore\|docs"; then
-                CATEGORY="maint"
-              elif echo "$TITLE" | grep -qi "^feat:"; then
-                CATEGORY="feat"
-              elif echo "$TITLE" | grep -qi "^fix:"; then
-                CATEGORY="fix"
-              elif echo "$TITLE" | grep -qi "^maint:\|^chore:\|^docs:"; then
-                CATEGORY="maint"
-              fi
-
-              # Create link to PR
-              PR_LINK="([#${PR_NUM}](https://github.com/${{ github.repository }}/pull/${PR_NUM}))"
-
-              case $CATEGORY in
-                "feat")
-                  FEATURES="${FEATURES}- ${TITLE} ${PR_LINK}"$'\n'
-                  ;;
-                "fix")
-                  FIXES="${FIXES}- ${TITLE} ${PR_LINK}"$'\n'
-                  ;;
-                "maint")
-                  MAINTENANCE="${MAINTENANCE}- ${TITLE} ${PR_LINK}"$'\n'
-                  ;;
-                *)
-                  OTHER="${OTHER}- ${TITLE} ${PR_LINK}"$'\n'
-                  ;;
-              esac
+            if [ -n "$FEATURES" ]; then
+              CHANGELOG_CONTENT="${CHANGELOG_CONTENT}## Features"$'\n'"$FEATURES"$'\n'
             fi
-          done
 
-          CHANGELOG_CONTENT="# $CURRENT_TAG ($(date +%Y-%m-%d))"$'\n\n'
+            if [ -n "$FIXES" ]; then
+              CHANGELOG_CONTENT="${CHANGELOG_CONTENT}## Bug Fixes"$'\n'"$FIXES"$'\n'
+            fi
 
-          if [ -n "$FEATURES" ]; then
-            CHANGELOG_CONTENT="${CHANGELOG_CONTENT}## Features"$'\n'"$FEATURES"$'\n'
+            if [ -n "$MAINTENANCE" ]; then
+              CHANGELOG_CONTENT="${CHANGELOG_CONTENT}## Maintenance"$'\n'"$MAINTENANCE"$'\n'
+            fi
+
+            if [ -n "$OTHER" ]; then
+              CHANGELOG_CONTENT="${CHANGELOG_CONTENT}## Other"$'\n'"$OTHER"$'\n'
+            fi
+
+            # If no PRs were added (all were filtered out), add a default message
+            if [ -z "$FEATURES" ] && [ -z "$FIXES" ] && [ -z "$MAINTENANCE" ] && [ -z "$OTHER" ]; then
+              CHANGELOG_CONTENT="# $CURRENT_TAG ($(date +%Y-%m-%d))"$'\n\n'
+              CHANGELOG_CONTENT="${CHANGELOG_CONTENT}No user-facing changes in this release."
+            fi
           fi
 
-          if [ -n "$FIXES" ]; then
-            CHANGELOG_CONTENT="${CHANGELOG_CONTENT}## Bug Fixes"$'\n'"$FIXES"$'\n'
-          fi
-
-          if [ -n "$MAINTENANCE" ]; then
-            CHANGELOG_CONTENT="${CHANGELOG_CONTENT}## Maintenance"$'\n'"$MAINTENANCE"$'\n'
-          fi
-
-          if [ -n "$OTHER" ]; then
-            CHANGELOG_CONTENT="${CHANGELOG_CONTENT}## Other"$'\n'"$OTHER"$'\n'
-          fi
+          echo "Generated changelog content:"
+          echo "$CHANGELOG_CONTENT"
 
           echo "changelog_content<<EOF" >> $GITHUB_OUTPUT
           echo "$CHANGELOG_CONTENT" >> $GITHUB_OUTPUT
@@ -188,19 +221,34 @@ jobs:
 
       - name: Update CHANGELOG.md
         run: |
+          echo "Updating CHANGELOG.md..."
+
+          # Create the directory if it doesn't exist
+          mkdir -p $(dirname CHANGELOG.md)
+
           if [ -f CHANGELOG.md ]; then
+            echo "Prepending to existing CHANGELOG.md"
             echo "${{ steps.changelog.outputs.changelog_content }}" > temp_changelog.md
             cat CHANGELOG.md >> temp_changelog.md
             mv temp_changelog.md CHANGELOG.md
           else
+            echo "Creating new CHANGELOG.md"
             echo "${{ steps.changelog.outputs.changelog_content }}" > CHANGELOG.md
           fi
 
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add CHANGELOG.md
-          git commit -m "Update CHANGELOG.md for ${{ github.ref_name }}" || exit 0
-          git push || exit 0
+          echo "CHANGELOG.md content:"
+          cat CHANGELOG.md
+
+          # Only commit if there are changes
+          if git diff --quiet CHANGELOG.md; then
+            echo "No changes to CHANGELOG.md"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add CHANGELOG.md
+            git commit -m "Update CHANGELOG.md for ${{ github.ref_name }}"
+            git push
+          fi
 
   publish-tauri:
     needs: generate-changelog
