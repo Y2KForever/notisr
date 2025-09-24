@@ -1,21 +1,11 @@
 use dotenvy_macro::dotenv;
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::Value;
 
 #[derive(Serialize)]
 pub struct Broadcaster {
   pub broadcaster_id: u64,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct Broadcasters {
-  pub broadcaster_id: String,
-  pub broadcaster_name: String,
-  pub category: String,
-  pub title: String,
-  pub is_live: bool,
-  pub profile_picture: Option<String>,
 }
 
 pub async fn register_streamers_webhook(streamers: Vec<Broadcaster>) {

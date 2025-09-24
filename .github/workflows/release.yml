@@ -1,21 +1,255 @@
 name: Release
-'on':
+on:
   push:
     tags:
-      - v*
+      - 'v*'
+
 jobs:
   generate-changelog:
     runs-on: ubuntu-latest
     outputs:
-      changelog_content: '${{ steps.changelog.outputs.changelog_content }}'
+      changelog_content: ${{ steps.changelog.outputs.changelog_content }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: '${{ secrets.GITHUB_TOKEN }}'
+          token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Verify version consistency
-  run: "# Extract version from tag (remove 'v' prefix)\nTAG_VERSION=\"${GITHUB_REF#refs/tags/v}\"\necho \"Tag version: $TAG_VERSION\"\n\n# Get version from Cargo.toml\nCARGO_VERSION=$(grep '^version =' src-tauri/Cargo.toml | head -1 | cut -d'\"' -f2)\necho \"Cargo.toml version: $CARGO_VERSION\"\n\n# Get version from package.json\nPACKAGE_VERSION=$(grep '\"version\":' package.json | head -1 | cut -d'\"' -f4)\necho \"package.json version: $PACKAGE_VERSION\"\n\n# Get version from tauri.conf.json using jq (more reliable for JSON)\nif command -v jq >/dev/null 2>&1; then\n  TAURI_VERSION=$(jq -r '.version' src-tauri/tauri.conf.json)\nelse\n  # Fallback to grep if jq not available\n  TAURI_VERSION=$(grep '\"version\":' src-tauri/tauri.conf.json | head -1 | cut -d'\"' -f4)\nfi\necho \"tauri.conf.json version: $TAURI_VERSION\"\n\n# Check if this is a test/pre-release tag\nif echo \"$TAG_VERSION\" | grep -qiE \"test|alpha|beta|rc|pre\"; then\n  echo \"\U0001F536 Test/Pre-release tag detected: $TAG_VERSION\"\n  echo \"Skipping strict version consistency check for test/pre-release\"\n  \n  # For test releases, just ensure the base version matches (before the test suffix)\n  BASE_TAG_VERSION=$(echo \"$TAG_VERSION\" | sed -E 's/[-_](test|alpha|beta|rc|pre).*//i')\n  echo \"Base version (without test suffix): $BASE_TAG_VERSION\"\n  \n  # Check if base versions match (relaxed check)\n  if [ \"$BASE_TAG_VERSION\" != \"$CARGO_VERSION\" ]; then\n    echo \"❌ ERROR: Base tag version ($BASE_TAG_VERSION) doesn't match Cargo.toml version ($CARGO_VERSION)\"\n    exit 1\n  fi\n  \n  if [ \"$BASE_TAG_VERSION\" != \"$PACKAGE_VERSION\" ]; then\n    echo \"❌ ERROR: Base tag version ($BASE_TAG_VERSION) doesn't match package.json version ($PACKAGE_VERSION)\"\n    exit 1\n  fi\n  \n  if [ \"$BASE_TAG_VERSION\" != \"$TAURI_VERSION\" ]; then\n    echo \"❌ ERROR: Base tag version ($BASE_TAG_VERSION) doesn't match tauri.conf.json version ($TAURI_VERSION)\"\n    exit 1\n  fi\n  \n  echo \"✅ Base version numbers are consistent: $BASE_TAG_VERSION\"\n  \nelse\n  # For regular releases, do strict checking\n  echo \"\U0001F535 Regular release tag detected: $TAG_VERSION\"\n  \n  # Check if all versions match exactly\n  if [ \"$TAG_VERSION\" != \"$CARGO_VERSION\" ]; then\n    echo \"❌ ERROR: Tag version ($TAG_VERSION) doesn't match Cargo.toml version ($CARGO_VERSION)\"\n    exit 1\n  fi\n  \n  if [ \"$TAG_VERSION\" != \"$PACKAGE_VERSION\" ]; then\n    echo \"❌ ERROR: Tag version ($TAG_VERSION) doesn't match package.json version ($PACKAGE_VERSION)\"\n    exit 1\n  fi\n  \n  if [ \"$TAG_VERSION\" != \"$TAURI_VERSION\" ]; then\n    echo \"❌ ERROR: Tag version ($TAG_VERSION) doesn't match tauri.conf.json version ($TAURI_VERSION)\"\n    exit 1\n  fi\n  \n  echo \"✅ All version numbers are consistent: $TAG_VERSION\"\nfi\n\n  - name: Generate Changelog\n    id: changelog\n    run: |\n      # Get previous and current tags\n      CURRENT_TAG=\"${{ github.ref_name }}\"\n      PREVIOUS_TAG=$(git describe --tags --abbrev=0 $(git rev-list --tags --skip=1 --max-count=1) 2>/dev/null || echo \"\")\n\n      if [ -z \"$PREVIOUS_TAG\" ]; then\n        COMMIT_RANGE=$(git rev-list --max-parents=0 HEAD)\n      else\n        COMMIT_RANGE=\"$PREVIOUS_TAG..HEAD\"\n      fi\n\n      # Get merge commits with PR numbers\n      MERGE_COMMITS=$(git log --oneline --merges $COMMIT_RANGE | grep -oP 'Merge pull request #\\K\\d+')\n\n      # Initialize categories\n      FEATURES=\"\"\n      FIXES=\"\"\n      MAINTENANCE=\"\"\n      OTHER=\"\"\n\n      for PR_NUM in $MERGE_COMMITS; do\n        PR_INFO=$(gh pr view $PR_NUM --json title,labels --jq '[.title, (.labels | map(.name) | join(\",\"))]' 2>/dev/null || echo \"\")\n\n        if [ -n \"$PR_INFO\" ]; then\n          IFS=$'\\t' read -r TITLE LABELS <<< \"$(echo \"$PR_INFO\" | sed 's/\\[\\\"\\(.*\\)\\\",\\\"\\(.*\\)\\\"\\]/\\1\\t\\2/')\"\n\n          # Skip version bump PRs (both by label and title pattern)\n          if echo \"$LABELS\" | grep -qi \"version-bump\" || \\\n            echo \"$TITLE\" | grep -qiE \"chore.*bump.*version|bump.*version|version.*bump|release.*v[0-9]\"; then\n            echo \"Skipping version bump PR: #$PR_NUM - $TITLE\"\n            continue\n          fi\n\n          # Determine category\n          CATEGORY=\"other\"\n\n          # Check labels first, then title\n          if echo \"$LABELS\" | grep -qi \"feat\\|feature\"; then\n            CATEGORY=\"feat\"\n          elif echo \"$LABELS\" | grep -qi \"fix\\|bug\"; then\n            CATEGORY=\"fix\"\n          elif echo \"$LABELS\" | grep -qi \"maint\\|maintenance\\|chore\\|docs\"; then\n            CATEGORY=\"maint\"\n          elif echo \"$TITLE\" | grep -qi \"^feat:\"; then\n            CATEGORY=\"feat\"\n          elif echo \"$TITLE\" | grep -qi \"^fix:\"; then\n            CATEGORY=\"fix\"\n          elif echo \"$TITLE\" | grep -qi \"^maint:\\|^chore:\\|^docs:\"; then\n            CATEGORY=\"maint\"\n          fi\n\n          # Create link to PR\n          PR_LINK=\"([#${PR_NUM}](https://github.com/${{ github.repository }}/pull/${PR_NUM}))\"\n\n          case $CATEGORY in\n            \"feat\")\n              FEATURES=\"${FEATURES}- ${TITLE} ${PR_LINK}\"$'\\n'\n              ;;\n            \"fix\")\n              FIXES=\"${FIXES}- ${TITLE} ${PR_LINK}\"$'\\n'\n              ;;\n            \"maint\")\n              MAINTENANCE=\"${MAINTENANCE}- ${TITLE} ${PR_LINK}\"$'\\n'\n              ;;\n            *)\n              OTHER=\"${OTHER}- ${TITLE} ${PR_LINK}\"$'\\n'\n              ;;\n          esac\n        fi\n      done\n\n      CHANGELOG_CONTENT=\"# $CURRENT_TAG ($(date +%Y-%m-%d))\"$'\\n\\n'\n\n      if [ -n \"$FEATURES\" ]; then\n        CHANGELOG_CONTENT=\"${CHANGELOG_CONTENT}## Features\"$'\\n'\"$FEATURES\"$'\\n'\n      fi\n\n      if [ -n \"$FIXES\" ]; then\n        CHANGELOG_CONTENT=\"${CHANGELOG_CONTENT}## Bug Fixes\"$'\\n'\"$FIXES\"$'\\n'\n      fi\n\n      if [ -n \"$MAINTENANCE\" ]; then\n        CHANGELOG_CONTENT=\"${CHANGELOG_CONTENT}## Maintenance\"$'\\n'\"$MAINTENANCE\"$'\\n'\n      fi\n\n      if [ -n \"$OTHER\" ]; then\n        CHANGELOG_CONTENT=\"${CHANGELOG_CONTENT}## Other\"$'\\n'\"$OTHER\"$'\\n'\n      fi\n\n      echo \"changelog_content<<EOF\" >> $GITHUB_OUTPUT\n      echo \"$CHANGELOG_CONTENT\" >> $GITHUB_OUTPUT\n      echo \"EOF\" >> $GITHUB_OUTPUT\n    env:\n      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n\n  - name: Update CHANGELOG.md\n    run: |\n      if [ -f CHANGELOG.md ]; then\n        echo \"${{ steps.changelog.outputs.changelog_content }}\" > temp_changelog.md\n        cat CHANGELOG.md >> temp_changelog.md\n        mv temp_changelog.md CHANGELOG.md\n      else\n        echo \"${{ steps.changelog.outputs.changelog_content }}\" > CHANGELOG.md\n      fi\n\n      git config user.name \"github-actions[bot]\"\n      git config user.email \"github-actions[bot]@users.noreply.github.com\"\n      git add CHANGELOG.md\n      git commit -m \"Update CHANGELOG.md for ${{ github.ref_name }}\" || exit 0\n      git push || exit 0\n"
+        run: |
+          # Extract version from tag (remove 'v' prefix)
+          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "Tag version: $TAG_VERSION"
+
+          # Get version from Cargo.toml
+          CARGO_VERSION=$(grep '^version =' src-tauri/Cargo.toml | head -1 | cut -d'"' -f2)
+          echo "Cargo.toml version: $CARGO_VERSION"
+
+          # Get version from package.json
+          PACKAGE_VERSION=$(grep '"version":' package.json | head -1 | cut -d'"' -f4)
+          echo "package.json version: $PACKAGE_VERSION"
+
+          # Get version from tauri.conf.json using jq (more reliable for JSON)
+          if command -v jq >/dev/null 2>&1; then
+            TAURI_VERSION=$(jq -r '.version' src-tauri/tauri.conf.json)
+          else
+            # Fallback to grep if jq not available
+            TAURI_VERSION=$(grep '"version":' src-tauri/tauri.conf.json | head -1 | cut -d'"' -f4)
+          fi
+          echo "tauri.conf.json version: $TAURI_VERSION"
+
+          # Check if this is a test/pre-release tag
+          if echo "$TAG_VERSION" | grep -qiE "test|alpha|beta|rc|pre"; then
+            echo "Test/Pre-release tag detected: $TAG_VERSION"
+            echo "Skipping strict version consistency check for test/pre-release"
+
+            # For test releases, just ensure the base version matches (before the test suffix)
+            BASE_TAG_VERSION=$(echo "$TAG_VERSION" | sed -E 's/[-_](test|alpha|beta|rc|pre).*//i')
+            echo "Base version (without test suffix): $BASE_TAG_VERSION"
+
+            # Check if base versions match (relaxed check)
+            if [ "$BASE_TAG_VERSION" != "$CARGO_VERSION" ]; then
+              echo "ERROR: Base tag version ($BASE_TAG_VERSION) doesn't match Cargo.toml version ($CARGO_VERSION)"
+              exit 1
+            fi
+
+            if [ "$BASE_TAG_VERSION" != "$PACKAGE_VERSION" ]; then
+              echo "ERROR: Base tag version ($BASE_TAG_VERSION) doesn't match package.json version ($PACKAGE_VERSION)"
+              exit 1
+            fi
+
+            if [ "$BASE_TAG_VERSION" != "$TAURI_VERSION" ]; then
+              echo "ERROR: Base tag version ($BASE_TAG_VERSION) doesn't match tauri.conf.json version ($TAURI_VERSION)"
+              exit 1
+            fi
+
+            echo "Base version numbers are consistent: $BASE_TAG_VERSION"
+
+          else
+            # For regular releases, do strict checking
+            echo "Regular release tag detected: $TAG_VERSION"
+
+            # Check if all versions match exactly
+            if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
+              echo "ERROR: Tag version ($TAG_VERSION) doesn't match Cargo.toml version ($CARGO_VERSION)"
+              exit 1
+            fi
+
+            if [ "$TAG_VERSION" != "$PACKAGE_VERSION" ]; then
+              echo "ERROR: Tag version ($TAG_VERSION) doesn't match package.json version ($PACKAGE_VERSION)"
+              exit 1
+            fi
+
+            if [ "$TAG_VERSION" != "$TAURI_VERSION" ]; then
+              echo "ERROR: Tag version ($TAG_VERSION) doesn't match tauri.conf.json version ($TAURI_VERSION)"
+              exit 1
+            fi
+
+            echo "All version numbers are consistent: $TAG_VERSION"
+          fi
+
+      - name: Generate Changelog
+        id: changelog
+        run: |
+          # Get previous and current tags
+          CURRENT_TAG="${{ github.ref_name }}"
+
+          # Try to get the previous tag, but handle the case where it doesn't exist
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 $(git rev-list --tags --skip=1 --max-count=1) 2>/dev/null || echo "")
+          echo "Current tag: $CURRENT_TAG"
+          echo "Previous tag: $PREVIOUS_TAG"
+
+          if [ -z "$PREVIOUS_TAG" ]; then
+            echo "No previous tag found - this is the first release"
+            # Get all commits from the beginning
+            COMMIT_RANGE=""
+          else
+            COMMIT_RANGE="$PREVIOUS_TAG..HEAD"
+          fi
+          echo "Commit range: $COMMIT_RANGE"
+
+          # Get merge commits with PR numbers
+          if [ -z "$COMMIT_RANGE" ]; then
+            # First release - get all merge commits
+            MERGE_COMMITS=$(git log --oneline --merges | grep -oP 'Merge pull request #\K\d+' || echo "")
+          else
+            MERGE_COMMITS=$(git log --oneline --merges $COMMIT_RANGE | grep -oP 'Merge pull request #\K\d+' || echo "")
+          fi
+
+          echo "Found merge commits: $MERGE_COMMITS"
+
+          # Initialize categories
+          FEATURES=""
+          FIXES=""
+          MAINTENANCE=""
+          OTHER=""
+
+          # If no merge commits found, provide a default message
+          if [ -z "$MERGE_COMMITS" ]; then
+            echo "No merge commits found in the range"
+            CHANGELOG_CONTENT="# $CURRENT_TAG ($(date +%Y-%m-%d))"$'\n\n'
+            CHANGELOG_CONTENT="${CHANGELOG_CONTENT}Initial release."
+          else
+            for PR_NUM in $MERGE_COMMITS; do
+              echo "Processing PR #$PR_NUM"
+              PR_INFO=$(gh pr view $PR_NUM --json title,labels --jq '[.title, (.labels | map(.name) | join(","))]' 2>/dev/null || echo "")
+
+              if [ -n "$PR_INFO" ]; then
+                IFS=$'\t' read -r TITLE LABELS <<< "$(echo "$PR_INFO" | sed 's/\[\"\(.*\)\",\"\(.*\)\"\]/\1\t\2/' 2>/dev/null || echo -e "\t")"
+
+                # Skip version bump PRs (both by label and title pattern)
+                if echo "$LABELS" | grep -qi "version-bump" || \
+                  echo "$TITLE" | grep -qiE "chore.*bump.*version|bump.*version|version.*bump|release.*v[0-9]"; then
+                  echo "Skipping version bump PR: #$PR_NUM - $TITLE"
+                  continue
+                fi
+
+                # Determine category
+                CATEGORY="other"
+
+                # Check labels first, then title
+                if echo "$LABELS" | grep -qi "feat\|feature"; then
+                  CATEGORY="feat"
+                elif echo "$LABELS" | grep -qi "fix\|bug"; then
+                  CATEGORY="fix"
+                elif echo "$LABELS" | grep -qi "maint\|maintenance\|chore\|docs"; then
+                  CATEGORY="maint"
+                elif echo "$TITLE" | grep -qi "^feat:"; then
+                  CATEGORY="feat"
+                elif echo "$TITLE" | grep -qi "^fix:"; then
+                  CATEGORY="fix"
+                elif echo "$TITLE" | grep -qi "^maint:\|^chore:\|^docs:"; then
+                  CATEGORY="maint"
+                fi
+
+                # Create link to PR
+                PR_LINK="[#${PR_NUM}](https://github.com/${{ github.repository }}/pull/${PR_NUM})"
+
+                case $CATEGORY in
+                  "feat")
+                    FEATURES="${FEATURES}- ${TITLE} ${PR_LINK}"$'\n'
+                    ;;
+                  "fix")
+                    FIXES="${FIXES}- ${TITLE} ${PR_LINK}"$'\n'
+                    ;;
+                  "maint")
+                    MAINTENANCE="${MAINTENANCE}- ${TITLE} ${PR_LINK}"$'\n'
+                    ;;
+                  *)
+                    OTHER="${OTHER}- ${TITLE} ${PR_LINK}"$'\n'
+                    ;;
+                esac
+              else
+                echo "Could not get info for PR #$PR_NUM"
+              fi
+            done
+
+            CHANGELOG_CONTENT="# $CURRENT_TAG ($(date +%Y-%m-%d))"$'\n\n'
+
+            if [ -n "$FEATURES" ]; then
+              CHANGELOG_CONTENT="${CHANGELOG_CONTENT}## Features"$'\n'"$FEATURES"$'\n'
+            fi
+
+            if [ -n "$FIXES" ]; then
+              CHANGELOG_CONTENT="${CHANGELOG_CONTENT}## Bug Fixes"$'\n'"$FIXES"$'\n'
+            fi
+
+            if [ -n "$MAINTENANCE" ]; then
+              CHANGELOG_CONTENT="${CHANGELOG_CONTENT}## Maintenance"$'\n'"$MAINTENANCE"$'\n'
+            fi
+
+            if [ -n "$OTHER" ]; then
+              CHANGELOG_CONTENT="${CHANGELOG_CONTENT}## Other"$'\n'"$OTHER"$'\n'
+            fi
+
+            # If no PRs were added (all were filtered out), add a default message
+            if [ -z "$FEATURES" ] && [ -z "$FIXES" ] && [ -z "$MAINTENANCE" ] && [ -z "$OTHER" ]; then
+              CHANGELOG_CONTENT="# $CURRENT_TAG ($(date +%Y-%m-%d))"$'\n\n'
+              CHANGELOG_CONTENT="${CHANGELOG_CONTENT}No user-facing changes in this release."
+            fi
+          fi
+
+          echo "Generated changelog content:"
+          echo "$CHANGELOG_CONTENT"
+
+          echo "changelog_content<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGELOG_CONTENT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update CHANGELOG.md
+        run: |
+          echo "Updating CHANGELOG.md..."
+
+          # Create the directory if it doesn't exist
+          mkdir -p $(dirname CHANGELOG.md)
+
+          if [ -f CHANGELOG.md ]; then
+            echo "Prepending to existing CHANGELOG.md"
+            echo "${{ steps.changelog.outputs.changelog_content }}" > temp_changelog.md
+            cat CHANGELOG.md >> temp_changelog.md
+            mv temp_changelog.md CHANGELOG.md
+          else
+            echo "Creating new CHANGELOG.md"
+            echo "${{ steps.changelog.outputs.changelog_content }}" > CHANGELOG.md
+          fi
+
+          echo "CHANGELOG.md content:"
+          cat CHANGELOG.md
+
+          # Only commit if there are changes
+          if git diff --quiet CHANGELOG.md; then
+            echo "No changes to CHANGELOG.md"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add CHANGELOG.md
+            git commit -m "Update CHANGELOG.md for ${{ github.ref_name }}"
+            git push
+          fi
+
   publish-tauri:
     needs: generate-changelog
     permissions:
@@ -24,44 +258,75 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-latest
+          - platform: 'macos-latest'
             args: '--target aarch64-apple-darwin'
-          - platform: macos-latest
+          - platform: 'macos-latest'
             args: '--target x86_64-apple-darwin'
-          - platform: ubuntu-22.04
+          - platform: 'windows-latest'
             args: ''
-          - platform: windows-latest
-            args: ''
-    runs-on: '${{ matrix.platform }}'
+
+    runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
+
       - name: setup node
         uses: actions/setup-node@v4
         with:
           node-version: lts/*
+
       - name: install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: >-
-            ${{ matrix.platform == 'macos-latest' &&
-            'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
-      - name: install dependencies (ubuntu only)
-        if: matrix.platform == 'ubuntu-22.04'
-        run: >
-          sudo apt-get update
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev
-          librsvg2-dev patchelf
+      - name: Create .env file for Unix
+        if: runner.os != 'Windows'
+        run: |
+          cat > .env << EOF
+          REDIRECT_URI=${{ secrets.REDIRECT_URI }}
+          CLIENT_ID=${{ secrets.CLIENT_ID }}
+          CLIENT_SECRET=${{ secrets.CLIENT_SECRET }}
+          SCOPE=${{ secrets.SCOPE }}
+          APPSYNC_HTTP_URI=${{ secrets.APPSYNC_HTTP_URI }}
+          APPSYNC_REALTIME_URI=${{ secrets.APPSYNC_REALTIME_URI }}
+          BASE_URI=${{ secrets.BASE_URI }}
+          EOF
+
+      - name: Create .env file for Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          @"
+          REDIRECT_URI=${{ secrets.REDIRECT_URI }}
+          CLIENT_ID=${{ secrets.CLIENT_ID }}
+          CLIENT_SECRET=${{ secrets.CLIENT_SECRET }}
+          SCOPE=${{ secrets.SCOPE }}
+          APPSYNC_HTTP_URI=${{ secrets.APPSYNC_HTTP_URI }}
+          APPSYNC_REALTIME_URI=${{ secrets.APPSYNC_REALTIME_URI }}
+          BASE_URI=${{ secrets.BASE_URI }}
+          "@ | Out-File -FilePath .env -Encoding utf8
+
       - name: install frontend dependencies
         run: yarn install
-      - uses: tauri-apps/tauri-action@v0
+
+      - uses: tauri-apps/tauri-action@v0.5
         env:
-          GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: app-v__VERSION__
-          releaseName: App v__VERSION__
+          releaseName: 'Notisr v__VERSION__'
           releaseBody: |
             ${{ needs.generate-changelog.outputs.changelog_content }}
           releaseDraft: true
           prerelease: false
-          args: '${{ matrix.args }}'
+          args: ${{ matrix.args }}
+
+      - name: Cleanup .env file
+        shell: bash
+        run: |
+          if [ -f .env ]; then
+            rm -f .env
+            echo ".env file removed"
+          fi
