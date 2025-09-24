@@ -281,15 +281,29 @@ jobs:
 
       - name: Create .env file
         run: |
-          cat > .env << EOF
-          REDIRECT_URI=${{ secrets.REDIRECT_URI }}
-          CLIENT_ID=${{ secrets.CLIENT_ID }}
-          CLIENT_SECRET=${{ secrets.CLIENT_SECRET }}
-          SCOPE=${{ secrets.SCOPE }}
-          APPSYNC_HTTP_URI=${{ secrets.APPSYNC_HTTP_URI }}
-          APPSYNC_REALTIME_URI=${{ secrets.APPSYNC_REALTIME_URI }}
-          BASE_URI=${{ secrets.BASE_URI }}
-          EOF
+          if [ "$RUNNER_OS" == "Windows" ]; then
+            # PowerShell command for Windows
+            powershell -Command @"
+            REDIRECT_URI=${{ secrets.REDIRECT_URI }}
+            CLIENT_ID=${{ secrets.CLIENT_ID }}
+            CLIENT_SECRET=${{ secrets.CLIENT_SECRET }}
+            SCOPE=${{ secrets.SCOPE }}
+            APPSYNC_HTTP_URI=${{ secrets.APPSYNC_HTTP_URI }}
+            APPSYNC_REALTIME_URI=${{ secrets.APPSYNC_REALTIME_URI }}
+            BASE_URI=${{ secrets.BASE_URI }}
+            "@ | Out-File -FilePath .env -Encoding utf8
+          else
+            # bash command for Unix
+            cat > .env << EOF
+            REDIRECT_URI=${{ secrets.REDIRECT_URI }}
+            CLIENT_ID=${{ secrets.CLIENT_ID }}
+            CLIENT_SECRET=${{ secrets.CLIENT_SECRET }}
+            SCOPE=${{ secrets.SCOPE }}
+            APPSYNC_HTTP_URI=${{ secrets.APPSYNC_HTTP_URI }}
+            APPSYNC_REALTIME_URI=${{ secrets.APPSYNC_REALTIME_URI }}
+            BASE_URI=${{ secrets.BASE_URI }}
+            EOF
+          fi
 
       - name: install frontend dependencies
         run: yarn install
@@ -305,3 +319,10 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+
+      - name: Cleanup .env file
+        run: |
+          if [ -f .env ]; then
+            rm -f .env
+            echo ".env file removed"
+          fi
