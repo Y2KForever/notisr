@@ -164,7 +164,7 @@ jobs:
                 fi
 
                 # Create link to PR
-                PR_LINK="([#${PR_NUM}](https://github.com/${{ github.repository }}/pull/${PR_NUM}))"
+                PR_LINK="[#${PR_NUM}](https://github.com/${{ github.repository }}/pull/${PR_NUM})"
 
                 case $CATEGORY in
                   "feat")
@@ -262,8 +262,6 @@ jobs:
             args: '--target aarch64-apple-darwin'
           - platform: 'macos-latest'
             args: '--target x86_64-apple-darwin'
-          - platform: 'ubuntu-22.04'
-            args: ''
           - platform: 'windows-latest'
             args: ''
 
@@ -281,11 +279,17 @@ jobs:
         with:
           targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
-      - name: install dependencies (ubuntu only)
-        if: matrix.platform == 'ubuntu-22.04'
+      - name: Create .env file
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          cat > .env << EOF
+          REDIRECT_URI=${{ secrets.REDIRECT_URI }}
+          CLIENT_ID=${{ secrets.CLIENT_ID }}
+          CLIENT_SECRET=${{ secrets.CLIENT_SECRET }}
+          SCOPE=${{ secrets.SCOPE }}
+          APPSYNC_HTTP_URI=${{ secrets.APPSYNC_HTTP_URI }}
+          APPSYNC_REALTIME_URI=${{ secrets.APPSYNC_REALTIME_URI }}
+          BASE_URI=${{ secrets.BASE_URI }}
+          EOF
 
       - name: install frontend dependencies
         run: yarn install
