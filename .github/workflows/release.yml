@@ -324,6 +324,7 @@ jobs:
           args: ${{ matrix.args }}
 
       - name: Cleanup .env file
+        shell: bash
         run: |
           if [ -f .env ]; then
             rm -f .env
