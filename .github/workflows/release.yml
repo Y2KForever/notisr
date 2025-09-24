@@ -279,31 +279,32 @@ jobs:
         with:
           targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
-      - name: Create .env file
+      - name: Create .env file for Unix
+        if: runner.os != 'Windows'
         run: |
-          if [ "$RUNNER_OS" == "Windows" ]; then
-            # PowerShell command for Windows
-            powershell -Command @"
-            REDIRECT_URI=${{ secrets.REDIRECT_URI }}
-            CLIENT_ID=${{ secrets.CLIENT_ID }}
-            CLIENT_SECRET=${{ secrets.CLIENT_SECRET }}
-            SCOPE=${{ secrets.SCOPE }}
-            APPSYNC_HTTP_URI=${{ secrets.APPSYNC_HTTP_URI }}
-            APPSYNC_REALTIME_URI=${{ secrets.APPSYNC_REALTIME_URI }}
-            BASE_URI=${{ secrets.BASE_URI }}
-            "@ | Out-File -FilePath .env -Encoding utf8
-          else
-            # bash command for Unix
-            cat > .env << EOF
-            REDIRECT_URI=${{ secrets.REDIRECT_URI }}
-            CLIENT_ID=${{ secrets.CLIENT_ID }}
-            CLIENT_SECRET=${{ secrets.CLIENT_SECRET }}
-            SCOPE=${{ secrets.SCOPE }}
-            APPSYNC_HTTP_URI=${{ secrets.APPSYNC_HTTP_URI }}
-            APPSYNC_REALTIME_URI=${{ secrets.APPSYNC_REALTIME_URI }}
-            BASE_URI=${{ secrets.BASE_URI }}
-            EOF
-          fi
+          cat > .env << EOF
+          REDIRECT_URI=${{ secrets.REDIRECT_URI }}
+          CLIENT_ID=${{ secrets.CLIENT_ID }}
+          CLIENT_SECRET=${{ secrets.CLIENT_SECRET }}
+          SCOPE=${{ secrets.SCOPE }}
+          APPSYNC_HTTP_URI=${{ secrets.APPSYNC_HTTP_URI }}
+          APPSYNC_REALTIME_URI=${{ secrets.APPSYNC_REALTIME_URI }}
+          BASE_URI=${{ secrets.BASE_URI }}
+          EOF
+
+      - name: Create .env file for Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          @"
+          REDIRECT_URI=${{ secrets.REDIRECT_URI }}
+          CLIENT_ID=${{ secrets.CLIENT_ID }}
+          CLIENT_SECRET=${{ secrets.CLIENT_SECRET }}
+          SCOPE=${{ secrets.SCOPE }}
+          APPSYNC_HTTP_URI=${{ secrets.APPSYNC_HTTP_URI }}
+          APPSYNC_REALTIME_URI=${{ secrets.APPSYNC_REALTIME_URI }}
+          BASE_URI=${{ secrets.BASE_URI }}
+          "@ | Out-File -FilePath .env -Encoding utf8
 
       - name: install frontend dependencies
         run: yarn install
