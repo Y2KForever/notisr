@@ -33,9 +33,6 @@ pub enum ControlMsg {
   RemoveSub {
     sub_id: String,
   },
-  UpdateToken {
-    token: String,
-  },
   Stop,
 }
 
@@ -74,6 +71,71 @@ async fn load_secret_blocking(key: String) -> Option<String> {
     .ok()
     .flatten()
 }
+async fn sync_followed_streamers_on_connect(
+  token: &Arc<RwLock<String>>,
+  user_id: &str,
+  subs: &mut HashMap<String, (String, Value)>,
+  broadcaster_to_uuid: &mut HashMap<String, String>,
+  pending_subscriptions: &mut HashSet<String>,
+) -> Result<(), String> {
+  let current_token = {
+    let tk = token.read().await;
+    tk.clone()
+  };
+
+  match fetch_followed_streamers(&current_token, &user_id).await {
+    Ok(new_ids_vec) => {
+      let new_ids: HashSet<String> = new_ids_vec.into_iter().collect();
+      let current_ids: HashSet<String> =
+        broadcaster_to_uuid.keys().cloned().collect();
+
+      let added: Vec<String> =
+        new_ids.difference(&current_ids).cloned().collect();
+      let removed: Vec<String> =
+        current_ids.difference(&new_ids).cloned().collect();
+
+      let mut broadcasters: Vec<Broadcaster> = Vec::new();
+      let mut valid_added: Vec<String> = Vec::new();
+
+      for s in &added {
+        match s.parse::<u64>() {
+          Ok(id) => {
+            broadcasters.push(Broadcaster { broadcaster_id: id });
+            valid_added.push(s.clone());
+          }
+          Err(e) => {
+            eprintln!("Skipping invalid broadcaster id '{}': {}", s, e);
+          }
+        }
+      }
+
+      if !broadcasters.is_empty() {
+        register_streamers_webhook(broadcasters).await;
+      }
+
+      for bid in valid_added {
+        let uuid = Uuid::new_v4().to_string();
+        let query = subscription_query();
+        let vars = json!({ "broadcaster_id": bid.clone() });
+        subs.insert(uuid.clone(), (query.clone(), vars.clone()));
+        broadcaster_to_uuid.insert(bid.clone(), uuid.clone());
+      }
+
+      for bid in removed {
+        if let Some(uuid) = broadcaster_to_uuid.remove(&bid) {
+          subs.remove(&uuid);
+          pending_subscriptions.remove(&uuid);
+        }
+      }
+
+      Ok(())
+    }
+    Err(e) => Err(format!(
+      "Failed fetch_followed_streamers on reconnect: {}",
+      e
+    )),
+  }
+}
 
 pub fn start_ws_client(
   app_handle: tauri::AppHandle,
@@ -92,23 +154,6 @@ pub fn start_ws_client(
   let token: Arc<RwLock<String>> = Arc::new(RwLock::new(token));
 
   tauri::async_runtime::spawn(worker_loop(app_handle, rx, token));
-  Ok(())
-}
-
-pub fn update_token(new_token: String) -> Result<(), String> {
-  let sender_cell = CTRL_SENDER
-    .get()
-    .ok_or_else(|| "client not running".to_string())?;
-
-  let guard = sender_cell.lock().unwrap();
-  let sender = guard
-    .as_ref()
-    .ok_or_else(|| "client not running".to_string())?;
-
-  sender
-    .send(ControlMsg::UpdateToken { token: new_token })
-    .map_err(|e| format!("send error: {}", e))?;
-
   Ok(())
 }
 
@@ -321,14 +366,6 @@ async fn worker_loop(
                                 }
                             }
                         }
-                        Some(ControlMsg::UpdateToken { token: t }) => {
-                            {
-                                let mut tk = token.write().await;
-                                *tk = t;
-                            }
-                            let _ = write.send(Message::Close(None)).await;
-                            break;
-                        }
                         Some(ControlMsg::Stop) | None => {
                             let _ = write.send(Message::Close(None)).await;
                             return Ok(());
@@ -441,7 +478,7 @@ async fn worker_loop(
                         Some(Action::Stop { sub_id }) => {
                             if connected {
                                 if let Some(uuid) = broadcaster_to_uuid.get(&sub_id) {
-                                    let stop = json!({ "id": uuid, "type": "stop" }).to_string();
+                                    let stop = serde_json::json!({ "id": uuid, "type": "stop" }).to_string();
                                     pending_subscriptions.remove(uuid);
                                     let _ = write.send(Message::Text(stop)).await;
                                 }
@@ -462,7 +499,10 @@ async fn worker_loop(
                                             println!("Connection_ack received");
                                             connected = true;
 
-                                            let cur_token = token.read().await;
+                                            if let Err(e) = sync_followed_streamers_on_connect(&token, &user_id, &mut subs, &mut broadcaster_to_uuid, &mut pending_subscriptions).await {
+                                                eprintln!("{}", e);
+                                            }
+                                            let cur_token_for_start = { let tk = token.read().await; tk.clone() };
                                             for (uuid, (q, vars)) in subs.iter() {
                                                 let data_obj = json!({
                                                     "query": q,
@@ -476,7 +516,7 @@ async fn worker_loop(
                                                         "data": data_str,
                                                         "extensions": {
                                                             "authorization": {
-                                                                "Authorization": format!("Bearer {}", *cur_token),
+                                                                "Authorization": format!("Bearer {}", cur_token_for_start),
                                                                 "host": http_uri
                                                             }
                                                         }
