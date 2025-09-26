@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Notisr",
   "version": "0.1.0",
-  "identifier": "com.notisr.app",
+  "identifier": "com.y2kforever.notisr",
   "build": {
     "beforeDevCommand": "yarn dev",
     "devUrl": "http://localhost:1420",
@@ -10,15 +10,6 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [
-      {
-        "title": "Notisr",
-        "width": 800,
-        "height": 600,
-        "minWidth": 250.0,
-        "minHeight": 100.0
-      }
-    ],
     "security": {
       "csp": {
         "default-src": "'self' customprotocol: asset:",

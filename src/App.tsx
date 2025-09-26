@@ -37,11 +37,11 @@ export const App = () => {
   const [loading, setLoading] = useState<boolean>(true);
   const hasCheckedUpdate = useRef(false); // Guard strictMode
   const version = useRef<string | undefined>(undefined);
+  const appWindow = useRef<any>(null);
 
   useEffect(() => {
-    check().then((val) => {
-      console.log(val);
-      version.current = val?.currentVersion;
+    import('@tauri-apps/api/window').then(({ Window }) => {
+      appWindow.current = Window;
     });
   }, []);
 
@@ -49,14 +49,19 @@ export const App = () => {
     invoke('on_startup').then((val) => {
       if (val === 'log_in') {
         setLayout('login');
+        appWindow.current?.show();
       } else {
         invoke('fetch_streamers');
+        appWindow.current?.hide();
       }
     });
     let unlistenLoggedIn: UnlistenFn;
 
     listen('logged_in', (_event) => {
       setLayout('list');
+      setTimeout(() => {
+        appWindow.current?.hide();
+      }, 1000);
     }).then((fn) => {
       unlistenLoggedIn = fn;
     });
