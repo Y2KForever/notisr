@@ -220,6 +220,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Update CHANGELOG.md
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           echo "Updating CHANGELOG.md..."
           git checkout main
