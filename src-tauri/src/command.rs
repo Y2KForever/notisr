@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::{
-  appsync::{update_token, ControlMsg},
+  appsync::ControlMsg,
   handle_setup_user,
   oauth::{gen_b64_url, generate_pkce_pair},
   twitch::fetch_followed_streamers,
@@ -76,7 +76,6 @@ pub fn login(app: AppHandle) {
   let nonce = gen_b64_url();
 
   let verifier_arc = Arc::new(Mutex::new(Some(pkce_verifier)));
-  let nonce_arc = Arc::new(Mutex::new(Some(nonce.clone())));
 
   let mut auth_url = Url::parse("https://id.twitch.tv/oauth2/authorize")
     .expect("valid base url");
@@ -95,19 +94,10 @@ pub fn login(app: AppHandle) {
 
   let url_string = auth_url.clone();
 
-  let ctl =
-    handle_setup_user(app.clone(), csrf_state, nonce_arc, verifier_arc.clone());
+  let ctl = handle_setup_user(app.clone(), csrf_state, verifier_arc.clone());
   app.manage(std::sync::Mutex::new(Some(ctl)));
 
-  let _ = tauri::WebviewWindowBuilder::new(
-    &app,
-    "login",
-    tauri::WebviewUrl::External(url_string),
-  )
-  .title("Login with Twitch")
-  .inner_size(800.0, 600.0)
-  .build()
-  .unwrap();
+  let _ = app.opener().open_url(url_string, None::<&str>);
 }
 
 #[tauri::command]
@@ -138,17 +128,6 @@ pub fn remove_subscription(sub_id: String) -> Result<(), String> {
     .send(ControlMsg::RemoveSub { sub_id })
     .map_err(|e| format!("send error: {}", e))?;
   Ok(())
-}
-
-#[tauri::command]
-pub fn refresh_token_ws() -> Result<(), String> {
-  match load_secret("id_token") {
-    Some(id_token) => {
-      let _ = update_token(id_token);
-      Ok(())
-    }
-    None => Err("Token doesn't exist".to_string()),
-  }
 }
 
 #[tauri::command]
