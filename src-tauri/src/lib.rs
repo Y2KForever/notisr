@@ -223,7 +223,17 @@ pub fn run() {
       .build()
       .unwrap();
 
-      let _ = TrayIconBuilder::new()
+      let mut tray_builder = TrayIconBuilder::new();
+
+      #[cfg(target_os = "macos")]
+      {
+        use tauri::include_image;
+
+        tray_builder = tray_builder
+          .icon(include_image!("./assets/notisr_icon_mac_tray.png"))
+      }
+
+      let _ = tray_builder
         .on_menu_event(|app, event| match event.id.as_ref() {
           "show" => {
             if let Some(window) = app.get_webview_window("main") {
@@ -236,7 +246,6 @@ pub fn run() {
         })
         .menu(&menu)
         .show_menu_on_left_click(show_menu_on_left_click)
-        .icon(app.default_window_icon().unwrap().clone())
         .on_tray_icon_event(|tray, event| match event {
           TrayIconEvent::Click {
             button: MouseButton::Left,
