@@ -222,28 +222,38 @@ jobs:
       - name: Update CHANGELOG.md
         run: |
           echo "Updating CHANGELOG.md..."
+          git checkout main
+          git pull origin main
 
           # Create or update CHANGELOG.md
           if [ -f CHANGELOG.md ]; then
-            echo "Updating existing CHANGELOG.md"
-            # Create temporary file with new content first, then append old content
-            echo "${{ steps.changelog.outputs.changelog_content }}" > CHANGELOG.new.md
-            cat CHANGELOG.md >> CHANGELOG.new.md
-            mv CHANGELOG.new.md CHANGELOG.md
+            echo "Prepending to existing CHANGELOG.md"
+            echo "${{ steps.changelog.outputs.changelog_content }}" > temp_changelog.md
+            cat CHANGELOG.md >> temp_changelog.md
+            mv temp_changelog.md CHANGELOG.md
           else
             echo "Creating new CHANGELOG.md"
             echo "${{ steps.changelog.outputs.changelog_content }}" > CHANGELOG.md
           fi
 
-          # Show what was created
           echo "CHANGELOG.md content:"
           cat CHANGELOG.md
 
+          # Configure git
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Add and commit
           git add CHANGELOG.md
-          git diff --staged --quiet || git commit -m "docs: Update CHANGELOG.md for ${{ github.ref_name }}"
-          git push
+
+          # Check if there are changes (works for both new and modified files)
+          if ! git diff-index --quiet HEAD --; then
+            git commit -m "docs: Update CHANGELOG.md for ${{ github.ref_name }}"
+            git push origin main
+            echo "CHANGELOG.md successfully updated and pushed"
+          else
+            echo "No changes to CHANGELOG.md"
+          fi
 
   publish-tauri:
     needs: generate-changelog
