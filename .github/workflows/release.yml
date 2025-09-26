@@ -224,6 +224,7 @@ jobs:
           echo "Updating CHANGELOG.md..."
           git checkout main
           git pull origin main
+          git checkout -b chore/update-changelog-${{ github.ref_name }}
 
           # Create or update CHANGELOG.md
           if [ -f CHANGELOG.md ]; then
@@ -242,15 +243,18 @@ jobs:
           # Configure git
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          # Add and commit
           git add CHANGELOG.md
 
-          # Check if there are changes (works for both new and modified files)
           if ! git diff-index --quiet HEAD --; then
             git commit -m "docs: Update CHANGELOG.md for ${{ github.ref_name }}"
-            git push origin main
-            echo "CHANGELOG.md successfully updated and pushed"
+            git push origin chore/update-changelog-${{ github.ref_name }}
+
+            # Create PR using GitHub CLI
+            gh pr create \
+              --title "Update CHANGELOG.md for ${{ github.ref_name }}" \
+              --body "Automated changelog update for release ${{ github.ref_name }}" \
+              --base main \
+              --head chore/update-changelog-${{ github.ref_name }}
           else
             echo "No changes to CHANGELOG.md"
           fi
