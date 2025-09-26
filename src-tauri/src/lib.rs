@@ -10,6 +10,7 @@ use dotenvy_macro::dotenv;
 use keyring::Entry;
 use reqwest::blocking::Client as BlockingClient;
 use rouille::{router, Response, Server};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -18,9 +19,8 @@ use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{
   MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent,
 };
-use tauri::webview::PageLoadEvent;
 use tauri::{
-  AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, RunEvent,
+  AppHandle, Emitter, LogicalPosition, Manager, PhysicalSize, RunEvent,
   WebviewUrl, WebviewWindow, WindowEvent,
 };
 use tauri_plugin_notification::{NotificationExt, PermissionState};
@@ -30,8 +30,11 @@ use crate::command::{
   fetch_streamers, login, on_startup, open_broadcaster_url, shutdown_server,
   ServerCtl,
 };
-use crate::oauth::verify_id_token;
 use crate::util::{check_validitiy_token, spawn_new_user};
+#[derive(Serialize, Deserialize, Debug)]
+struct UserInfo {
+  user_id: String,
+}
 
 fn set_window_size(window: &WebviewWindow) {
   let opt_monitor = window.current_monitor().unwrap();
@@ -45,7 +48,7 @@ fn set_window_size(window: &WebviewWindow) {
 
   window
     .set_size(PhysicalSize {
-      width: 500.0,
+      width: 250.0,
       height: monitor.size().height as f64,
     })
     .unwrap();
@@ -61,20 +64,15 @@ fn set_window_position(window: &WebviewWindow) {
     }
   };
 
-  let size = window.inner_size().unwrap();
+  let x = ((monitor.size().width as f64) / monitor.scale_factor()) - 250.0; // Remove magic number
+  let y = 0.0;
 
-  window
-    .set_position(PhysicalPosition {
-      x: (monitor.size().width - size.width) as f64,
-      y: 0.0,
-    })
-    .unwrap();
+  window.set_position(LogicalPosition { x: x, y: y }).unwrap();
 }
 
 fn handle_setup_user(
   app: AppHandle,
   csrf_state: String,
-  nonce: Arc<Mutex<Option<String>>>,
   code_verifier: Arc<Mutex<Option<String>>>,
 ) -> ServerCtl {
   let server = Server::new("127.0.0.1:1337", move |request| {
@@ -89,11 +87,6 @@ fn handle_setup_user(
                 if returned_state != csrf_state {
                     return Response::text("Invalid state").with_status_code(400);
                 }
-
-                let nonce_value = {
-                    let mut guard = nonce.lock().unwrap();
-                    guard.take().ok_or_else(|| Response::text("Nonce already used").with_status_code(400)).unwrap()
-                };
 
                 if let Some(returned_challenge) = params.get("code_challenge") {
                     let expected = {
@@ -142,39 +135,34 @@ fn handle_setup_user(
                         Err(e) => return Response::text(format!("Invalid token JSON: {:?}", e)).with_status_code(500)
                     };
 
-                    let id_token_str = match token_val.get("id_token").and_then(|v| v.as_str()) {
-                        Some(s) => s,
-                        None => return Response::text("no id_token in response").with_status_code(500)
-                    };
-
-                    let jwks_uri = "https://id.twitch.tv/oauth2/keys";
-                    let expected_issuer = "https://id.twitch.tv/oauth2";
-
-                    let claims = match verify_id_token(id_token_str, jwks_uri, expected_issuer, &client_id, Some(&nonce_value)) {
-                        Ok(c) => c,
-                        Err(e) => return Response::text(format!("id_token verify failed: {:?}", e)).with_status_code(400)
-                    };
-
-                    let user_id = claims.sub.clone();
-
-                    Entry::new("notisr", "id_token").expect("failed to create entry").set_secret(id_token_str.as_bytes()).expect("failed to set id_token to entry");
-
                     let access_token = match token_val.get("access_token").and_then(|v| v.as_str()) {
                       Some(token) => {token.to_owned()}
                       None => panic!("Access token did not exist in json")
                     };
 
+                    let client = BlockingClient::new();
+                    let validation_response = match client.get("https://id.twitch.tv/oauth2/validate").header("Authorization", format!("Bearer {}", access_token)).send() {
+                      Ok(r) => {r},
+                      Err(e) => {return Response::text(format!("Network error: {:?}", e)).with_status_code(500)},
+                    };
+
+                    let user_info: UserInfo = match validation_response.json() {
+                        Ok(v) => v,
+                        Err(e) => { return Response::text(format!("Failed to parse JSON: {:?}", e)).with_status_code(500) },
+                    };
+
                     let access_token_cloned = access_token.clone();
-                    let user_cloned = user_id.clone();
+                    let user_id = user_info.user_id;
                     let app_cloned = app.clone();
                     let access_token_ws = access_token.clone();
 
                     Entry::new("notisr", "access_token").unwrap()
                         .set_secret(access_token.as_bytes()).unwrap();
 
-                    spawn_new_user(access_token_cloned, user_cloned, access_token_ws, app_cloned);
+                    Entry::new("notisr", "user_id").expect("Failed to create user_id entry")
+                    .set_secret(user_id.as_bytes()).expect("failed to set user_id to entry");
 
-                    Entry::new("notisr", "user_id").expect("Failed to create user_id entry").set_secret(claims.sub.as_bytes()).expect("failed to set user_id to entry");
+                    spawn_new_user(access_token_cloned, user_id, access_token_ws, app_cloned);
 
                     if let Some(refresh_token) = token_val.get("refresh_token").and_then(|v| v.as_str()) {
                         Entry::new("notisr", "refresh_token").expect("failed to create refresh_token entry").set_secret(refresh_token.as_bytes()).expect("failed to set refresh_token");
@@ -186,9 +174,12 @@ fn handle_setup_user(
                         let _ = window.emit("logged_in", ());
                         set_window_size(&window);
                         set_window_position(&window);
+
+                        let _ = window.show();
+                        let _ = window.set_focus();
                     }
 
-                    Response::text("Login successful—token stored securely!")
+                    Response::text("Login successful!\n\nYou can now close this window.")
                 } else if status.is_client_error() {
                     Response::text(format!("Client error: {}, body: {}", status, body)).with_status_code(400)
                 } else if status.is_server_error() {
@@ -218,6 +209,19 @@ pub fn run() {
         MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
 
       let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+      let decision = check_validitiy_token();
+      let needs_login = decision.is_none();
+      let main_window = tauri::WebviewWindowBuilder::new(
+        app,
+        "main",
+        WebviewUrl::App("index.html".into()),
+      )
+      .title("Notisr")
+      .inner_size(500.0, 800.0)
+      .min_inner_size(250.0, 100.0)
+      .visible(false)
+      .build()
+      .unwrap();
 
       let _ = TrayIconBuilder::new()
         .on_menu_event(|app, event| match event.id.as_ref() {
@@ -225,30 +229,6 @@ pub fn run() {
             if let Some(window) = app.get_webview_window("main") {
               let _ = window.show();
               let _ = window.set_focus();
-            } else {
-              let monitors = app.available_monitors().unwrap();
-              let x = ((monitors[0].size().width as f64)
-                / monitors[0].scale_factor())
-                - 250.0;
-              let y = 0.0;
-              let height = monitors[0].size().height as f64;
-              let _webview = tauri::WebviewWindowBuilder::new(
-                app,
-                "main",
-                WebviewUrl::App("index.html".into()),
-              )
-              .title("Notisr")
-              .position(x, y)
-              .inner_size(250.0, height)
-              .visible(false)
-              .on_page_load(|window, payload| {
-                if payload.event() == PageLoadEvent::Finished {
-                  let _ = window.show();
-                  let _ = window.set_focus();
-                }
-              })
-              .build()
-              .unwrap();
             }
           }
           "quit" => app.exit(0),
@@ -280,8 +260,26 @@ pub fn run() {
       let auth_state: Mutex<Option<String>> = Mutex::new(None);
       app.manage(auth_state);
 
-      let decision = check_validitiy_token();
-      *app.state::<Mutex<Option<String>>>().lock().unwrap() = decision;
+      *app.state::<Mutex<Option<String>>>().lock().unwrap() = decision.clone();
+
+      if needs_login {
+        if let Some(window) = app.get_webview_window("main") {
+          let _ = window.show();
+        }
+      } else {
+        set_window_size(&main_window);
+        set_window_position(&main_window);
+        if let Some(token) = &decision {
+          let token = token.clone();
+          let app_handle = app.handle().clone();
+          std::thread::spawn(move || {
+            if let Err(e) = start_ws_client(app_handle, token) {
+              eprintln!("WebSocket client failed to start: {:?}", e);
+            }
+          });
+        }
+      }
+
       match app.notification().permission_state() {
         Ok(permission_state) => {
           if permission_state != PermissionState::Granted {
@@ -289,26 +287,16 @@ pub fn run() {
           }
         }
         Err(e) => {
-          println!("Error while trying to get permssion state: {:?}", e)
+          println!("Error while trying to get permission state: {:?}", e)
         }
       }
 
       Ok(())
     })
-    .on_page_load(|webview, _payload| {
-      let v = check_validitiy_token();
-
-      if v.is_some() {
-        set_window_position(
-          &webview.window().get_webview_window("main").unwrap(),
-        );
-        set_window_size(&webview.window().get_webview_window("main").unwrap());
-      }
-    })
     .plugin(tauri_plugin_opener::init())
     .plugin(tauri_plugin_positioner::init())
     .plugin(tauri_plugin_notification::init())
-    .plugin(tauri_plugin_updater::Builder::new().build())
+    // .plugin(tauri_plugin_updater::Builder::new().build())
     .plugin(tauri_plugin_dialog::init())
     .plugin(tauri_plugin_process::init())
     .invoke_handler(tauri::generate_handler![
@@ -323,15 +311,6 @@ pub fn run() {
   #[allow(unused_mut)]
   let mut app = builder.build(context).expect("Error while building app");
 
-  let valid_token = check_validitiy_token();
-
-  if let Some(token) = valid_token {
-    let app_handle = app.handle().clone();
-    if let Err(e) = start_ws_client(app_handle, token) {
-      eprintln!("start_ws_client failed in thread: {:?}", e);
-    }
-  }
-
   app.run(move |app_handle, event| match event {
     RunEvent::WindowEvent { label, event, .. } => {
       if label == "main" {
@@ -345,7 +324,7 @@ pub fn run() {
     }
     RunEvent::ExitRequested { .. } => {
       if let Err(e) = stop_ws_client() {
-        panic!("Failed to stop the ws client. Error: {:?}", e);
+        eprintln!("Failed to stop the ws client. Error: {:?}", e);
       }
     }
     _ => {}
