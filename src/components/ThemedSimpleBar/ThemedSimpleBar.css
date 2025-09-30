@@ -1,0 +1,50 @@
+/* components/ThemedSimpleBar.css */
+@import 'simplebar-react/dist/simplebar.min.css';
+
+.themed-simplebar {
+  height: 100%;
+  width: 100%;
+}
+
+/* Light theme */
+.themed-simplebar.light {
+  --scrollbar-track: #f1f1f1;
+  --scrollbar-thumb: #c1c1c1;
+  --scrollbar-thumb-hover: #a8a8a8;
+}
+
+/* Dark theme */
+.themed-simplebar.dark {
+  --scrollbar-track: #2d2d2d;
+  --scrollbar-thumb: #6b6b6b;
+  --scrollbar-thumb-hover: #7d7d7d;
+}
+
+/* Apply the variables with proper auto-hide */
+.themed-simplebar .simplebar-scrollbar::before {
+  background: var(--scrollbar-thumb);
+  opacity: 0;
+  transition: opacity 0.3s ease; /* Add smooth transition */
+}
+
+.themed-simplebar .simplebar-track {
+  background: var(--scrollbar-track);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+/* Show scrollbar on hover of the track */
+.themed-simplebar .simplebar-track.simplebar-hover .simplebar-scrollbar::before,
+.themed-simplebar:hover .simplebar-track .simplebar-scrollbar::before {
+  opacity: 0.6;
+}
+
+.themed-simplebar .simplebar-track.simplebar-hover,
+.themed-simplebar:hover .simplebar-track {
+  opacity: 1;
+}
+
+.themed-simplebar .simplebar-scrollbar:hover::before {
+  background: var(--scrollbar-thumb-hover);
+  opacity: 0.8;
+}

@@ -9,6 +9,7 @@ import { Separator } from '@/components/ui/separator';
 import { check } from '@tauri-apps/plugin-updater';
 import { ask, message } from '@tauri-apps/plugin-dialog';
 import { relaunch } from '@tauri-apps/plugin-process';
+import { ThemedSimpleBar } from './components/ThemedSimpleBar/ThemedSimpleBar';
 import { cleanChangelog } from './lib/utils';
 
 export const checkForUpdate = async (onUserClick: false) => {
@@ -87,15 +88,17 @@ export const App = () => {
   }, []);
 
   return (
-    <div className="h-[100%] w-full dark:bg-[#26262c] bg-[#efeff1] flex flex-col">
-      <div className="flex flex-row items-center">
-        {version.current && import.meta.env.DEV && (
-          <p className="ml-2 dark:text-[#515156] text-[#D7D7D8]">{version.current}</p>
-        )}
-        <Menu />
+    <ThemedSimpleBar className="h-full w-full" autoHide={true}>
+      <div className="h-[100%] w-full dark:bg-[#26262c] bg-[#efeff1] flex flex-col">
+        <div className="flex flex-row items-center">
+          {version.current && import.meta.env.DEV && (
+            <p className="ml-2 dark:text-[#515156] text-[#D7D7D8]">{version.current}</p>
+          )}
+          <Menu />
+        </div>
+        <Separator className="mt-1 mb-2" />
+        {layout === 'login' ? <LogIn /> : layout === 'list' && <List setLoading={setLoading} loading={loading} />}
       </div>
-      <Separator className="mt-1 mb-2" />
-      {layout === 'login' ? <LogIn /> : layout === 'list' && <List setLoading={setLoading} loading={loading} />}
-    </div>
+    </ThemedSimpleBar>
   );
 };
