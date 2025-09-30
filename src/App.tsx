@@ -10,16 +10,20 @@ import { check } from '@tauri-apps/plugin-updater';
 import { ask, message } from '@tauri-apps/plugin-dialog';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { ThemedSimpleBar } from './components/ThemedSimpleBar/ThemedSimpleBar';
+import { cleanChangelog } from './lib/utils';
 
 export const checkForUpdate = async (onUserClick: false) => {
   const update = await check();
   if (update) {
-    const yes = await ask(`Update to ${update.version} is available! \n\n\ Release notes: ${update.body}`, {
-      title: 'Update available',
-      kind: 'info',
-      okLabel: 'Update',
-      cancelLabel: 'Cancel',
-    });
+    const yes = await ask(
+      `Update to ${update.version} is available! \n\n\ Release notes: ${cleanChangelog(update.body)}`,
+      {
+        title: 'Update available',
+        kind: 'info',
+        okLabel: 'Update',
+        cancelLabel: 'Cancel',
+      },
+    );
     if (yes) {
       await update.downloadAndInstall();
       await relaunch();

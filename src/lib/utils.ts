@@ -15,4 +15,13 @@ export const truncate = (text: string) => {
   return base.replace(/\s+$/u, '') + ' ...';
 };
 
-
+export const cleanChangelog = (body: string | undefined | null): string => {
+  if (body === undefined || body === null) {
+    return '';
+  }
+  let result: string = body;
+  result = result.replace(/\s*\[#([^\]]+)\]\([^)]*\)/g, '');
+  result = result.replace(/\s*\[#([^\]]+)\]/g, '');
+  result = result.replace(/ +$/gm, '');
+  return result;
+};
