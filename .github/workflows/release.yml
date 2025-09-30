@@ -94,30 +94,20 @@ jobs:
         run: |
           # Get previous and current tags
           CURRENT_TAG="${{ github.ref_name }}"
-
-          # Try to get the previous tag, but handle the case where it doesn't exist
           PREVIOUS_TAG=$(git describe --tags --abbrev=0 $(git rev-list --tags --skip=1 --max-count=1) 2>/dev/null || echo "")
-          echo "Current tag: $CURRENT_TAG"
-          echo "Previous tag: $PREVIOUS_TAG"
 
           if [ -z "$PREVIOUS_TAG" ]; then
-            echo "No previous tag found - this is the first release"
-            # Get all commits from the beginning
             COMMIT_RANGE=""
           else
             COMMIT_RANGE="$PREVIOUS_TAG..HEAD"
           fi
-          echo "Commit range: $COMMIT_RANGE"
 
           # Get merge commits with PR numbers
           if [ -z "$COMMIT_RANGE" ]; then
-            # First release - get all merge commits
             MERGE_COMMITS=$(git log --oneline --merges | grep -oP 'Merge pull request #\K\d+' || echo "")
           else
             MERGE_COMMITS=$(git log --oneline --merges $COMMIT_RANGE | grep -oP 'Merge pull request #\K\d+' || echo "")
           fi
-
-          echo "Found merge commits: $MERGE_COMMITS"
 
           # Initialize categories
           FEATURES=""
@@ -125,87 +115,96 @@ jobs:
           MAINTENANCE=""
           OTHER=""
 
-          # If no merge commits found, provide a default message
-          if [ -z "$MERGE_COMMITS" ]; then
-            echo "No merge commits found in the range"
-            CHANGELOG_CONTENT="# $CURRENT_TAG ($(date +%Y-%m-%d))"$'\n\n'
-            CHANGELOG_CONTENT="${CHANGELOG_CONTENT}Initial release."
-          else
-            for PR_NUM in $MERGE_COMMITS; do
-              echo "Processing PR #$PR_NUM"
-              PR_INFO=$(gh pr view $PR_NUM --json title,labels --jq '[.title, (.labels | map(.name) | join(","))]' 2>/dev/null || echo "")
+          for PR_NUM in $MERGE_COMMITS; do
+            echo "Processing PR #$PR_NUM"
 
-              if [ -n "$PR_INFO" ]; then
-                IFS=$'\t' read -r TITLE LABELS <<< "$(echo "$PR_INFO" | sed 's/\[\"\(.*\)\",\"\(.*\)\"\]/\1\t\2/' 2>/dev/null || echo -e "\t")"
+            # Get PR info including branch name
+            PR_INFO=$(gh pr view $PR_NUM --json title,headRefName --jq '[.title, .headRefName] | @tsv' 2>/dev/null || echo "")
 
-                # Skip version bump PRs (both by label and title pattern)
-                if echo "$LABELS" | grep -qi "version-bump" || \
-                  echo "$TITLE" | grep -qiE "chore.*bump.*version|bump.*version|version.*bump|release.*v[0-9]"; then
-                  echo "Skipping version bump PR: #$PR_NUM - $TITLE"
-                  continue
-                fi
+            if [ -n "$PR_INFO" ]; then
+              IFS=$'\t' read -r TITLE BRANCH_NAME <<< "$PR_INFO"
 
-                # Determine category
-                CATEGORY="other"
-
-                # Check labels first, then title
-                if echo "$LABELS" | grep -qi "feat\|feature"; then
-                  CATEGORY="feat"
-                elif echo "$LABELS" | grep -qi "fix\|bug"; then
-                  CATEGORY="fix"
-                elif echo "$LABELS" | grep -qi "maint\|maintenance\|chore\|docs"; then
-                  CATEGORY="maint"
-                elif echo "$TITLE" | grep -qi "^feat:"; then
-                  CATEGORY="feat"
-                elif echo "$TITLE" | grep -qi "^fix:"; then
-                  CATEGORY="fix"
-                elif echo "$TITLE" | grep -qi "^maint:\|^chore:\|^docs:"; then
-                  CATEGORY="maint"
-                fi
-
-                # Create link to PR
-                PR_LINK="[#${PR_NUM}](https://github.com/${{ github.repository }}/pull/${PR_NUM})"
-
-                case $CATEGORY in
-                  "feat")
-                    FEATURES="${FEATURES}- ${TITLE} ${PR_LINK}"$'\n'
-                    ;;
-                  "fix")
-                    FIXES="${FIXES}- ${TITLE} ${PR_LINK}"$'\n'
-                    ;;
-                  "maint")
-                    MAINTENANCE="${MAINTENANCE}- ${TITLE} ${PR_LINK}"$'\n'
-                    ;;
-                  *)
-                    OTHER="${OTHER}- ${TITLE} ${PR_LINK}"$'\n'
-                    ;;
-                esac
-              else
-                echo "Could not get info for PR #$PR_NUM"
+              # Skip version bump PRs based on branch name or title
+              if echo "$BRANCH_NAME" | grep -qiE "release|version|bump" || \
+                echo "$TITLE" | grep -qiE "chore.*bump.*version|bump.*version|version.*bump|release.*v[0-9]"; then
+                echo "Skipping version bump PR: #$PR_NUM - $TITLE (branch: $BRANCH_NAME)"
+                continue
               fi
-            done
 
+              # Determine category based on branch name prefix
+              CATEGORY="other"
+              BRANCH_PREFIX=$(echo "$BRANCH_NAME" | cut -d'/' -f1 | tr '[:upper:]' '[:lower:]')
+
+              case $BRANCH_PREFIX in
+                "feat"|"feature")
+                  CATEGORY="feat"
+                  ;;
+                "fix"|"bugfix")
+                  CATEGORY="fix"
+                  ;;
+                "maint"|"chore"|"docs"|"refactor")
+                  CATEGORY="maint"
+                  ;;
+                *)
+                  # Fallback to title if branch doesn't match expected patterns
+                  if echo "$TITLE" | grep -qi "^feat:"; then
+                    CATEGORY="feat"
+                  elif echo "$TITLE" | grep -qi "^fix:"; then
+                    CATEGORY="fix"
+                  elif echo "$TITLE" | grep -qi "^maint:\|^chore:\|^docs:\|^refactor:"; then
+                    CATEGORY="maint"
+                  fi
+                  ;;
+              esac
+
+              # Create link to PR
+              PR_LINK="[#${PR_NUM}](https://github.com/${{ github.repository }}/pull/${PR_NUM})"
+
+              echo "PR #$PR_NUM: '$TITLE' (branch: $BRANCH_NAME) -> category: $CATEGORY"
+
+              case $CATEGORY in
+                "feat")
+                  FEATURES="${FEATURES}- ${TITLE} ${PR_LINK}"$'\n'
+                  ;;
+                "fix")
+                  FIXES="${FIXES}- ${TITLE} ${PR_LINK}"$'\n'
+                  ;;
+                "maint")
+                  MAINTENANCE="${MAINTENANCE}- ${TITLE} ${PR_LINK}"$'\n'
+                  ;;
+                *)
+                  OTHER="${OTHER}- ${TITLE} ${PR_LINK}"$'\n'
+                  ;;
+              esac
+            else
+              echo "Could not get info for PR #$PR_NUM"
+            fi
+          done
+
+          CHANGELOG_CONTENT="# $CURRENT_TAG ($(date +%Y-%m-%d))"$'\n\n'
+
+          if [ -n "$FEATURES" ]; then
+            CHANGELOG_CONTENT="${CHANGELOG_CONTENT}## Features"$'\n'"$FEATURES"$'\n'
+          fi
+
+          if [ -n "$FIXES" ]; then
+            CHANGELOG_CONTENT="${CHANGELOG_CONTENT}## Bug Fixes"$'\n'"$FIXES"$'\n'
+          fi
+
+          if [ -n "$MAINTENANCE" ]; then
+            CHANGELOG_CONTENT="${CHANGELOG_CONTENT}## Maintenance"$'\n'"$MAINTENANCE"$'\n'
+          fi
+
+          if [ -n "$OTHER" ]; then
+            CHANGELOG_CONTENT="${CHANGELOG_CONTENT}## Other"$'\n'"$OTHER"$'\n'
+          fi
+
+          # If no PRs were found, add a default message
+          if [ -z "$FEATURES" ] && [ -z "$FIXES" ] && [ -z "$MAINTENANCE" ] && [ -z "$OTHER" ]; then
             CHANGELOG_CONTENT="# $CURRENT_TAG ($(date +%Y-%m-%d))"$'\n\n'
-
-            if [ -n "$FEATURES" ]; then
-              CHANGELOG_CONTENT="${CHANGELOG_CONTENT}## Features"$'\n'"$FEATURES"$'\n'
-            fi
-
-            if [ -n "$FIXES" ]; then
-              CHANGELOG_CONTENT="${CHANGELOG_CONTENT}## Bug Fixes"$'\n'"$FIXES"$'\n'
-            fi
-
-            if [ -n "$MAINTENANCE" ]; then
-              CHANGELOG_CONTENT="${CHANGELOG_CONTENT}## Maintenance"$'\n'"$MAINTENANCE"$'\n'
-            fi
-
-            if [ -n "$OTHER" ]; then
-              CHANGELOG_CONTENT="${CHANGELOG_CONTENT}## Other"$'\n'"$OTHER"$'\n'
-            fi
-
-            # If no PRs were added (all were filtered out), add a default message
-            if [ -z "$FEATURES" ] && [ -z "$FIXES" ] && [ -z "$MAINTENANCE" ] && [ -z "$OTHER" ]; then
-              CHANGELOG_CONTENT="# $CURRENT_TAG ($(date +%Y-%m-%d))"$'\n\n'
+            if [ -z "$PREVIOUS_TAG" ]; then
+              CHANGELOG_CONTENT="${CHANGELOG_CONTENT}Initial release."
+            else
               CHANGELOG_CONTENT="${CHANGELOG_CONTENT}No user-facing changes in this release."
             fi
           fi
@@ -219,14 +218,18 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Update CHANGELOG.md
+      - name: Update and Auto-Merge CHANGELOG.md
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "Updating CHANGELOG.md..."
+
+          # Switch to main branch and get latest
           git checkout main
           git pull origin main
-          git checkout -b chore/update-changelog-${{ github.ref_name }}
+
+          BRANCH_NAME="chore/update-changelog-${{ github.ref_name }}-$(date +%s)"
+          git checkout -b $BRANCH_NAME
 
           # Create or update CHANGELOG.md
           if [ -f CHANGELOG.md ]; then
@@ -239,26 +242,41 @@ jobs:
             echo "${{ steps.changelog.outputs.changelog_content }}" > CHANGELOG.md
           fi
 
-          echo "CHANGELOG.md content:"
-          cat CHANGELOG.md
-
-          # Configure git
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add CHANGELOG.md
 
           if ! git diff-index --quiet HEAD --; then
             git commit -m "docs: Update CHANGELOG.md for ${{ github.ref_name }}"
-            git push origin chore/update-changelog-${{ github.ref_name }}
+            git push origin $BRANCH_NAME
 
-            # Create PR using GitHub CLI
-            gh pr create \
+            # Wait a moment for branch to be available
+            sleep 3
+
+            # Create PR and capture the PR number
+            PR_JSON=$(gh pr create \
               --title "Update CHANGELOG.md for ${{ github.ref_name }}" \
-              --body "Automated changelog update for release ${{ github.ref_name }}" \
+              --body "Automated changelog update for release ${{ github.ref_name }}." \
               --base main \
-              --head chore/update-changelog-${{ github.ref_name }}
+              --head $BRANCH_NAME \
+              --output json)
+
+            PR_NUMBER=$(echo "$PR_JSON" | jq -r '.number')
+            PR_URL=$(echo "$PR_JSON" | jq -r '.url')
+
+            echo "Pull request created: #$PR_NUMBER - $PR_URL"
+
+            # Enable auto-merge (squash) - this will merge when requirements are met
+            gh pr merge $PR_NUMBER --squash --auto --delete-branch
+
+            echo "Auto-merge enabled for PR #$PR_NUMBER"
+
+            # If you want immediate merge (bypassing any requirements):
+            # gh pr merge $PR_NUMBER --squash --delete-branch --admin
           else
             echo "No changes to CHANGELOG.md"
+            git checkout main
+            git branch -D $BRANCH_NAME
           fi
 
   publish-tauri:
@@ -326,7 +344,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: app-v__VERSION__
+          tagName: v__VERSION__
           releaseName: 'Notisr v__VERSION__'
           releaseBody: |
             ${{ needs.generate-changelog.outputs.changelog_content }}
