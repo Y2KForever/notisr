@@ -18,8 +18,6 @@
 
 ### Download & Install
 
-**Latest Release: v0.1.0**
-
 |  Platform   |                                  Download                                  |      Instructions       |
 | :---------: | :------------------------------------------------------------------------: | :---------------------: |
 |  **macOS**  |  [notisr-macos.dmg](https://github.com/Y2KForever/notisr/releases/latest)  | Double-click to install |
