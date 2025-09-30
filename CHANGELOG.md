@@ -1,3 +1,11 @@
+# v0.2.1 (2025-09-30)
+
+## Maintenance
+- v0.2.1 [#54](https://github.com/Y2KForever/notisr/pull/54)
+- Categories based on branch name instead of content [#53](https://github.com/Y2KForever/notisr/pull/53)
+- Update CHANGELOG.md for v0.2.0 [#45](https://github.com/Y2KForever/notisr/pull/45)
+
+
 # v0.2.0 (2025-09-26)
 
 ## Maintenance
