@@ -224,21 +224,17 @@ jobs:
         run: |
           echo "Updating CHANGELOG.md..."
 
-          # Switch to main branch and get latest
           git checkout main
           git pull origin main
 
           BRANCH_NAME="chore/update-changelog-${{ github.ref_name }}-$(date +%s)"
           git checkout -b $BRANCH_NAME
 
-          # Create or update CHANGELOG.md
           if [ -f CHANGELOG.md ]; then
-            echo "Prepending to existing CHANGELOG.md"
             echo "${{ steps.changelog.outputs.changelog_content }}" > temp_changelog.md
             cat CHANGELOG.md >> temp_changelog.md
             mv temp_changelog.md CHANGELOG.md
           else
-            echo "Creating new CHANGELOG.md"
             echo "${{ steps.changelog.outputs.changelog_content }}" > CHANGELOG.md
           fi
 
@@ -251,28 +247,43 @@ jobs:
             git push origin $BRANCH_NAME
 
             # Wait a moment for branch to be available
-            sleep 3
+            sleep 2
 
-            # Create PR and capture the PR number
-            PR_JSON=$(gh pr create \
+            # Create PR and capture full output
+            PR_CREATE_OUTPUT=$(gh pr create \
               --title "Update CHANGELOG.md for ${{ github.ref_name }}" \
               --body "Automated changelog update for release ${{ github.ref_name }}." \
               --base main \
-              --head $BRANCH_NAME \
-              --output json)
+              --head $BRANCH_NAME 2>&1)
 
-            PR_NUMBER=$(echo "$PR_JSON" | jq -r '.number')
-            PR_URL=$(echo "$PR_JSON" | jq -r '.url')
+            echo "Full PR creation output:"
+            echo "$PR_CREATE_OUTPUT"
 
-            echo "Pull request created: #$PR_NUMBER - $PR_URL"
+            # Extract PR number using multiple methods
+            PR_NUMBER=$(echo "$PR_CREATE_OUTPUT" | grep -oE 'https://github.com/[^/]+/[^/]+/pull/[0-9]+' | sed 's|.*/pull/||')
 
-            # Enable auto-merge (squash) - this will merge when requirements are met
-            gh pr merge $PR_NUMBER --squash --auto --delete-branch
+            # Alternative extraction method if above fails
+            if [ -z "$PR_NUMBER" ]; then
+              PR_NUMBER=$(echo "$PR_CREATE_OUTPUT" | grep -oE '/pull/[0-9]+' | head -1 | cut -d'/' -f3)
+            fi
 
-            echo "Auto-merge enabled for PR #$PR_NUMBER"
+            # Another fallback method
+            if [ -z "$PR_NUMBER" ]; then
+              PR_NUMBER=$(echo "$PR_CREATE_OUTPUT" | grep -oE '#[0-9]+' | head -1 | cut -d'#' -f2)
+            fi
 
-            # If you want immediate merge (bypassing any requirements):
-            # gh pr merge $PR_NUMBER --squash --delete-branch --admin
+            if [ -n "$PR_NUMBER" ]; then
+              echo "Extracted PR number: #$PR_NUMBER"
+
+              # Auto-merge the PR
+              gh pr merge "$PR_NUMBER" --squash --delete-branch --admin
+
+              echo "Pull request auto-merged and branch deleted"
+            else
+              echo "Could not extract PR number. Full output was:"
+              echo "$PR_CREATE_OUTPUT"
+              exit 1
+            fi
           else
             echo "No changes to CHANGELOG.md"
             git checkout main
