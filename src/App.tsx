@@ -9,16 +9,20 @@ import { Separator } from '@/components/ui/separator';
 import { check } from '@tauri-apps/plugin-updater';
 import { ask, message } from '@tauri-apps/plugin-dialog';
 import { relaunch } from '@tauri-apps/plugin-process';
+import { cleanChangelog } from './lib/utils';
 
 export const checkForUpdate = async (onUserClick: false) => {
   const update = await check();
   if (update) {
-    const yes = await ask(`Update to ${update.version} is available! \n\n\ Release notes: ${update.body}`, {
-      title: 'Update available',
-      kind: 'info',
-      okLabel: 'Update',
-      cancelLabel: 'Cancel',
-    });
+    const yes = await ask(
+      `Update to ${update.version} is available! \n\n\ Release notes: ${cleanChangelog(update.body)}`,
+      {
+        title: 'Update available',
+        kind: 'info',
+        okLabel: 'Update',
+        cancelLabel: 'Cancel',
+      },
+    );
     if (yes) {
       await update.downloadAndInstall();
       await relaunch();
@@ -43,6 +47,12 @@ export const App = () => {
     import('@tauri-apps/api/window').then(({ Window }) => {
       appWindow.current = Window;
     });
+
+    if (import.meta.env.DEV) {
+      import('@tauri-apps/api/app').then(({ getVersion }) => {
+        getVersion().then((v) => (version.current = v));
+      });
+    }
   }, []);
 
   useEffect(() => {
@@ -52,7 +62,6 @@ export const App = () => {
         appWindow.current?.show();
       } else {
         invoke('fetch_streamers');
-        appWindow.current?.hide();
       }
     });
     let unlistenLoggedIn: UnlistenFn;
@@ -79,8 +88,12 @@ export const App = () => {
 
   return (
     <div className="h-[100%] w-full dark:bg-[#26262c] bg-[#efeff1] flex flex-col">
-      <Menu />
-      {version.current && import.meta.env.DEV && <p>{version.current}</p>}
+      <div className="flex flex-row items-center">
+        {version.current && import.meta.env.DEV && (
+          <p className="ml-2 dark:text-[#515156] text-[#D7D7D8]">{version.current}</p>
+        )}
+        <Menu />
+      </div>
       <Separator className="mt-1 mb-2" />
       {layout === 'login' ? <LogIn /> : layout === 'list' && <List setLoading={setLoading} loading={loading} />}
     </div>
