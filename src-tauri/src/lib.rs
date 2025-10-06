@@ -3,11 +3,13 @@ pub mod command;
 mod oauth;
 mod twitch;
 mod util;
+mod notifications;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use dotenvy_macro::dotenv;
 use keyring::Entry;
+use mac_notification_sys::{get_bundle_identifier_or_default, set_application};
 use reqwest::blocking::Client as BlockingClient;
 use rouille::{router, Response, Server};
 use serde::{Deserialize, Serialize};
@@ -224,6 +226,18 @@ pub fn run() {
       .unwrap();
 
       let mut tray_builder = TrayIconBuilder::new();
+
+      let bundle_name;
+
+      if cfg!(dev) {
+        bundle_name = "com.y2kforever.notisr";
+      } else {
+        bundle_name = "notisr";
+      }
+
+      let bundle = get_bundle_identifier_or_default(&bundle_name);
+
+      let _ = set_application(&bundle).unwrap();
 
       #[cfg(target_os = "macos")]
       {
