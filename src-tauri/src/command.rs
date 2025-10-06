@@ -1,6 +1,6 @@
 use std::{
-  sync::mpsc::Sender,
-  sync::{Arc, Mutex},
+  collections::HashSet,
+  sync::{mpsc::Sender, Arc, Mutex, OnceLock},
   thread::JoinHandle,
 };
 
@@ -15,12 +15,11 @@ use dotenvy_macro::dotenv;
 use once_cell::sync::OnceCell;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_opener::OpenerExt;
 use tokio::sync::mpsc::UnboundedSender;
 use url::Url;
-use uuid::Uuid;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Broadcasters {
@@ -38,6 +37,9 @@ pub struct ServerCtl {
 }
 
 static CTRL_SENDER: OnceCell<UnboundedSender<ControlMsg>> = OnceCell::new();
+
+static CURRENT_SUBSCRIPTIONS: OnceLock<Mutex<HashSet<String>>> =
+  OnceLock::new();
 
 #[tauri::command]
 pub fn shutdown_server(
@@ -101,32 +103,44 @@ pub fn login(app: AppHandle) {
 }
 
 #[tauri::command]
-pub fn add_subscription(
-  query: String,
-  variables: Value,
-) -> Result<String, String> {
+pub fn add_subscription(broadcaster_id: String) -> Result<(), String> {
   let sender = CTRL_SENDER
     .get()
     .ok_or_else(|| "client not running".to_string())?;
-  let sub_id = Uuid::new_v4().to_string();
+
+  let current_subs =
+    CURRENT_SUBSCRIPTIONS.get_or_init(|| Mutex::new(HashSet::new()));
+
+  let mut subs = current_subs.lock().unwrap();
+  subs.insert(broadcaster_id.clone());
+
+  let streamer_ids: Vec<String> = subs.iter().cloned().collect();
+
   sender
-    .send(ControlMsg::AddSub {
-      sub_id: sub_id.clone(),
-      query,
-      variables,
-    })
+    .send(ControlMsg::UpdateSubscriptions { streamer_ids })
     .map_err(|e| format!("send error: {}", e))?;
-  Ok(sub_id)
+
+  Ok(())
 }
 
 #[tauri::command]
-pub fn remove_subscription(sub_id: String) -> Result<(), String> {
+pub fn remove_subscription(broadcaster_id: String) -> Result<(), String> {
   let sender = CTRL_SENDER
     .get()
     .ok_or_else(|| "client not running".to_string())?;
+
+  let current_subs =
+    CURRENT_SUBSCRIPTIONS.get_or_init(|| Mutex::new(HashSet::new()));
+
+  let mut subs = current_subs.lock().unwrap();
+  subs.remove(&broadcaster_id);
+
+  let streamer_ids: Vec<String> = subs.iter().cloned().collect();
+
   sender
-    .send(ControlMsg::RemoveSub { sub_id })
+    .send(ControlMsg::UpdateSubscriptions { streamer_ids })
     .map_err(|e| format!("send error: {}", e))?;
+
   Ok(())
 }
 
