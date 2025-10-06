@@ -8,7 +8,6 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 use std::{sync::Arc, time::Duration};
 use tauri::{Emitter, Manager};
-use tauri_plugin_notification::NotificationExt;
 use tokio::sync::mpsc::{
   unbounded_channel, UnboundedReceiver, UnboundedSender,
 };
@@ -18,6 +17,7 @@ use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use url::Url;
 use uuid::Uuid;
 
+use crate::notifications::send_notification;
 use crate::oauth::refresh_access_token;
 use crate::twitch::{
   fetch_followed_streamers, register_streamers_webhook, Broadcaster,
@@ -558,8 +558,11 @@ async fn worker_loop(
                                             match window.emit("streamer:update", Value::Object(out.clone())) {
                                                 Ok(_) => {
                                                     let name = match streamer_obj.get("broadcaster_name") {
-                                                        Some(streamer_name) => {streamer_name.to_string()}
-                                                        None => {"Unkown".to_string()}
+                                                        Some(value) => match value {
+                                                            serde_json::Value::String(s) => s.clone(),
+                                                            _ => "Unknown".to_string(),
+                                                        },
+                                                        None => "Unknown".to_string(),
                                                     };
 
                                                     let title = match streamer_obj.get("title"){
@@ -572,20 +575,14 @@ async fn worker_loop(
                                                         None => {"".to_string()}
                                                     };
 
+                                                    let msg = format!("{} - {}", cat, title);
+
                                                     if streamer_obj.get("type").is_some_and(|x| x == "channel_updated") {
-                                                        window.notification()
-                                                        .builder()
-                                                        .title(format!("{} - Channel updated", name))
-                                                        .body(format!("{} - {}", cat, title))
-                                                        .show()
-                                                        .expect("Failed to send channel_updated notification");
+                                                      let heading = format!("{} - Channel updated", name);
+                                                      _ = send_notification(heading, msg, name, app_handle.clone());
                                                     } else if streamer_obj.get("type").is_some_and(|x| x == "status") {
-                                                        window.notification()
-                                                        .builder()
-                                                        .title(format!("{} - Just went live!", name))
-                                                        .body(format!("{} - {}", cat, title))
-                                                        .show()
-                                                        .expect("Failed to send live notification")
+                                                      let heading = format!("{} - Just went live!", name);
+                                                      _ = send_notification(heading, msg, name, app_handle.clone());
                                                     }
                                                 }
                                                 Err(e) => {println!("Error trying to emit streamer:update. {:?}", e)}
