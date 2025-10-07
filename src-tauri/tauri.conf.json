@@ -19,6 +19,9 @@
     }
   },
   "bundle": {
+    "macOS": {
+      "entitlements": "entitlements.plist"
+    },
     "createUpdaterArtifacts": true,
     "active": true,
     "targets": ["dmg", "msi", "nsis", "app"],

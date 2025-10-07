@@ -1,14 +1,14 @@
 mod appsync;
 pub mod command;
+mod notifications;
 mod oauth;
 mod twitch;
 mod util;
-mod notifications;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use dotenvy_macro::dotenv;
-use keyring::Entry;
+use keyring_core::Result;
 use mac_notification_sys::{get_bundle_identifier_or_default, set_application};
 use reqwest::blocking::Client as BlockingClient;
 use rouille::{router, Response, Server};
@@ -36,6 +36,29 @@ use crate::util::{check_validitiy_token, spawn_new_user};
 #[derive(Serialize, Deserialize, Debug)]
 struct UserInfo {
   user_id: String,
+}
+
+#[cfg(debug_assertions)]
+mod dev_store;
+
+#[cfg(target_os = "macos")]
+pub fn set_platform_default_store() -> Result<()> {
+  #[cfg(not(debug_assertions))]
+  {
+    let store = apple_native_keyring_store::protected::Store::new()?;
+    keyring_core::set_default_store(store);
+  }
+  Ok(())
+}
+
+#[cfg(target_os = "windows")]
+pub fn set_platform_default_store() -> Result<()> {
+  #[cfg(not(debug_assertions))]
+  {
+    let store = keyring::windows_native_keyring_store::Store::new()?;
+    keyring_core::set_default_store(store);
+  }
+  Ok(())
 }
 
 fn set_window_size(window: &WebviewWindow) {
@@ -157,19 +180,61 @@ fn handle_setup_user(
                     let user_id = user_info.user_id;
                     let app_cloned = app.clone();
                     let access_token_ws = access_token.clone();
-
-                    Entry::new("notisr", "access_token").unwrap()
-                        .set_secret(access_token.as_bytes()).unwrap();
-
-                    Entry::new("notisr", "user_id").expect("Failed to create user_id entry")
-                    .set_secret(user_id.as_bytes()).expect("failed to set user_id to entry");
-
+                    #[cfg(not(debug_assertions))]
+                    {
+                        // PRODUCTION
+                        use keyring_core::Entry;
+                        Entry::new("notisr", "access_token")
+                            .unwrap()
+                            .set_secret(access_token.as_bytes())
+                            .unwrap();
+                    }
+                    #[cfg(debug_assertions)]
+                    {
+                        // DEVELOPMENT
+                        use crate::dev_store::DevEntry;
+                        DevEntry::new("notisr", "access_token")
+                            .set_secret(access_token.as_bytes())
+                            .unwrap();
+                    }
+                    #[cfg(not(debug_assertions))]
+                    {
+                        // PRODUCTION
+                        use keyring_core::Entry;
+                        Entry::new("notisr", "user_id")
+                            .unwrap()
+                            .set_secret(user_id.as_bytes())
+                            .unwrap();
+                    }
+                    #[cfg(debug_assertions)]
+                    {
+                        // DEVELOPMENT
+                        use crate::dev_store::DevEntry;
+                        DevEntry::new("notisr", "user_id")
+                            .set_secret(user_id.as_bytes())
+                            .unwrap();
+                    }
                     spawn_new_user(access_token_cloned, user_id, access_token_ws, app_cloned);
 
                     if let Some(refresh_token) = token_val.get("refresh_token").and_then(|v| v.as_str()) {
-                        Entry::new("notisr", "refresh_token").expect("failed to create refresh_token entry").set_secret(refresh_token.as_bytes()).expect("failed to set refresh_token");
+                      #[cfg(not(debug_assertions))]
+                      {
+                          // PRODUCTION
+                          use keyring_core::Entry;
+                          Entry::new("notisr", "refresh_token")
+                              .unwrap()
+                              .set_secret(refresh_token.as_bytes())
+                              .unwrap();
+                      }
+                      #[cfg(debug_assertions)]
+                      {
+                          // DEVELOPMENT
+                          use crate::dev_store::DevEntry;
+                          DevEntry::new("notisr", "refresh_token")
+                              .set_secret(refresh_token.as_bytes())
+                              .unwrap();
+                      }
                     }
-
                     if let Some(win) = app.get_webview_window("login") { let _ = win.close(); }
                     if let Some(window) = app.get_webview_window("main") {
                         window.try_state::<Mutex<Option<String>>>().unwrap().lock().unwrap().take();
@@ -203,6 +268,7 @@ pub fn run() {
   let builder = tauri::Builder::default()
     .plugin(tauri_plugin_notification::init())
     .setup(|app| {
+      set_platform_default_store()?;
       let show_menu_on_left_click = cfg!(target_os = "macos");
 
       let quit_item =
@@ -346,6 +412,7 @@ pub fn run() {
       }
     }
     RunEvent::ExitRequested { .. } => {
+      keyring_core::unset_default_store();
       if let Err(e) = stop_ws_client() {
         eprintln!("Failed to stop the ws client. Error: {:?}", e);
       }
