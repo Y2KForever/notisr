@@ -1,3 +1,4 @@
+use std::thread;
 use tauri::AppHandle;
 
 pub fn send_notification(
@@ -11,49 +12,57 @@ pub fn send_notification(
     use mac_notification_sys::{MainButton, Notification};
     use tauri_plugin_opener::OpenerExt;
 
-    let notification_res: Result<
-      mac_notification_sys::NotificationResponse,
-      mac_notification_sys::error::Error,
-    > = Notification::new()
-      .main_button(MainButton::SingleAction("Open stream"))
-      .title(&title)
-      .message(&content)
-      .default_sound()
-      .send();
+    let title_clone = title.clone();
+    let content_clone = content.clone();
+    let name_clone = name.clone();
+    let app_handle_clone = app_handle.clone();
 
-    match notification_res {
-      Ok(notification_resp) => match notification_resp {
-        mac_notification_sys::NotificationResponse::ActionButton(_) => {
-          let _ = app_handle
-            .opener()
-            .open_url(format!("https://twitch.tv/{}", name), None::<&str>)
-            .unwrap();
+    thread::spawn(move || {
+      let notification_res = Notification::new()
+        .main_button(MainButton::SingleAction("Open stream"))
+        .title(&title_clone)
+        .message(&content_clone)
+        .default_sound()
+        .send();
+
+      match notification_res {
+        Ok(notification_resp) => match notification_resp {
+          mac_notification_sys::NotificationResponse::ActionButton(_) => {
+            let _ = app_handle_clone.opener().open_url(
+              format!("https://twitch.tv/{}", name_clone),
+              None::<&str>,
+            );
+          }
+          mac_notification_sys::NotificationResponse::Click => {
+            let _ = app_handle_clone.opener().open_url(
+              format!("https://twitch.tv/{}", name_clone),
+              None::<&str>,
+            );
+          }
+          mac_notification_sys::NotificationResponse::CloseButton(_) => {}
+          mac_notification_sys::NotificationResponse::None => {}
+          mac_notification_sys::NotificationResponse::Reply(_) => {}
+        },
+        Err(e) => {
+          use tauri_plugin_notification::NotificationExt;
+
+          println!("Error creating notification: {:?}", e);
+          // Fallback to default Tauri notification if we fail to deliver.
+          app_handle_clone
+            .notification()
+            .builder()
+            .title(&title_clone)
+            .body(&content_clone)
+            .show()
+            .expect("Failed to deliver tauri notification");
         }
-        mac_notification_sys::NotificationResponse::Click => {
-          let _ = app_handle
-            .opener()
-            .open_url(format!("https://twitch.tv/{}", name), None::<&str>)
-            .unwrap();
-        }
-        mac_notification_sys::NotificationResponse::CloseButton(_) => {}
-        mac_notification_sys::NotificationResponse::None => {}
-        mac_notification_sys::NotificationResponse::Reply(_) => {}
-      },
-      Err(e) => {
-        println!("Error creating notification: {:?}", e)
       }
-    }
+    });
   }
 
   #[cfg(target_os = "windows")]
   {
-    use std::str::FromStr;
-    use tauri_plugin_notification::{Attachment, NotificationExt};
-    use url::Url;
-
-    let link = format!("https://twitch.tv/{}", name);
-    let url = Url::from_str(&link).unwrap();
-    let id = uuid::Uuid::new_v4().to_string();
+    use tauri_plugin_notification::NotificationExt;
 
     let _ = app_handle
       .notification()
