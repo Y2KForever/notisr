@@ -43,5 +43,6 @@ tauri-plugin-updater = "2.9.0"
 tauri-plugin-dialog = "2.4.0"
 tauri-plugin-process = "2.3.0"
 mac-notification-sys = "0.6.6"
+anyhow = "1.0.100"
 
 
