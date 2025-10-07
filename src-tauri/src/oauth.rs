@@ -1,7 +1,6 @@
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use dotenvy_macro::dotenv;
-use keyring::Entry;
 use rand::RngCore;
 use reqwest::blocking::Client as BlockingClient;
 use serde::Deserialize;
@@ -94,24 +93,59 @@ pub fn refresh_access_token(
       .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
       .unwrap();
 
-    Entry::new("notisr", "access_token")
-      .and_then(|e| e.set_secret(raw.access_token.as_bytes()))
-      .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
-      .unwrap();
+    #[cfg(not(debug_assertions))]
+    {
+      // PRODUCTION
+      use keyring_core::Entry;
+      Entry::new("notisr", "access_token")
+        .unwrap()
+        .set_secret(raw.access_token.as_bytes())
+        .unwrap();
+    }
+    #[cfg(debug_assertions)]
+    {
+      // DEVELOPMENT
+      use crate::dev_store::DevEntry;
+      DevEntry::new("notisr", "access_token")
+        .set_secret(raw.access_token.as_bytes())
+        .unwrap();
+    }
 
-    Entry::new("notisr", "refresh_token")
-      .and_then(|e| e.set_secret(raw.refresh_token.as_bytes()))
-      .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
-      .unwrap();
+    #[cfg(not(debug_assertions))]
+    {
+      // PRODUCTION
+      use keyring_core::Entry;
+      Entry::new("notisr", "refresh_token")
+        .unwrap()
+        .set_secret(raw.refresh_token.as_bytes())
+        .unwrap();
+    }
+    #[cfg(debug_assertions)]
+    {
+      // DEVELOPMENT
+      use crate::dev_store::DevEntry;
+      DevEntry::new("notisr", "access_token")
+        .set_secret(raw.refresh_token.as_bytes())
+        .unwrap();
+    }
 
     return Ok(raw.refresh_token);
   }
 
   if status.as_u16() == 401 {
-    let _ =
-      Entry::new("notisr", "access_token").and_then(|e| e.delete_credential());
-    let _ =
-      Entry::new("notisr", "refresh_token").and_then(|e| e.delete_credential());
+    #[cfg(not(debug_assertions))]
+    {
+      // PRODUCTION
+      use keyring_core::Entry;
+      let _ = Entry::new("notisr", "access_token").and_then(|e| e.delete_credential());
+    }
+    #[cfg(debug_assertions)]
+    {
+      // DEVELOPMENT
+      use crate::dev_store::DevEntry;
+      let access_token_entry = DevEntry::new("notisr", "access_token");
+      let _ = access_token_entry.delete_secret();
+    }
     return Err(Box::new(std::io::Error::new(
       std::io::ErrorKind::PermissionDenied,
       format!("refresh token invalid (401): {}", body),

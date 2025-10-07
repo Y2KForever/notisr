@@ -1,4 +1,3 @@
-use keyring::Entry;
 use tauri::AppHandle;
 
 use crate::{
@@ -9,11 +8,25 @@ use crate::{
 };
 
 pub fn load_secret(name: &str) -> Option<String> {
-  Entry::new("notisr", name)
-    .ok()?
-    .get_secret()
-    .ok()
-    .and_then(|bytes| String::from_utf8(bytes).ok())
+  #[cfg(not(debug_assertions))]
+  {
+    // PRODUCTION
+    use keyring_core::Entry;
+    Entry::new("notisr", name)
+      .ok()?
+      .get_secret()
+      .ok()
+      .and_then(|bytes| String::from_utf8(bytes).ok())
+  }
+  #[cfg(debug_assertions)]
+  {
+    // DEVELOPMENT code: Uses our fake DevEntry
+    use crate::dev_store::DevEntry;
+    DevEntry::new("notisr", name)
+      .get_secret()
+      .ok()
+      .and_then(|bytes| String::from_utf8(bytes).ok())
+  }
 }
 
 pub fn spawn_new_user(
