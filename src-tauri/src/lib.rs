@@ -343,7 +343,7 @@ pub fn run() {
         })
         .menu(&menu)
         .show_menu_on_left_click(show_menu_on_left_click)
-        .on_tray_icon_event(|_tray, event| match event {
+        .on_tray_icon_event(|tray, event| match event {
           TrayIconEvent::Click {
             button: MouseButton::Left,
             button_state: MouseButtonState::Up,
