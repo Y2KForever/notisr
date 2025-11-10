@@ -1,3 +1,4 @@
+#[cfg(target_os = "macos")]
 use std::thread;
 use tauri::AppHandle;
 
@@ -5,7 +6,7 @@ pub fn send_notification(
   title: String,
   content: String,
   name: String,
-  app_handle: AppHandle,
+  #[allow(unused)] app_handle: AppHandle,
 ) {
   #[cfg(target_os = "macos")]
   {
@@ -62,13 +63,18 @@ pub fn send_notification(
 
   #[cfg(target_os = "windows")]
   {
-    use tauri_plugin_notification::NotificationExt;
+    use universal_notifications::Windows::{
+      ActivationType, Duration, Sound, Toast,
+    };
 
-    let _ = app_handle
-      .notification()
-      .builder()
-      .title(title)
-      .body(content)
+    let url = format!("https://twitch.tv/{}", name);
+
+    Toast::new("com.y2kforever.notisr")
+      .title(&title)
+      .description(&content)
+      .duration(Duration::Long)
+      .sound(Some(Sound::Default))
+      .action("Open Stream", &url, ActivationType::Protocol)
       .show()
       .expect("Failed to deliver notifications");
   }
