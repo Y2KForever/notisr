@@ -71,12 +71,14 @@ fn set_window_size(window: &WebviewWindow) {
     }
   };
 
-  let mut window_height = 0.0;
-
-  if cfg!(target_os = "macos") {
+  let window_height: f64;
+  #[cfg(target_os = "windows")]
+  {
+    window_height = (monitor.size().height - 32) as f64;
+  }
+  #[cfg(target_os = "macos")]
+  {
     window_height = monitor.size().height as f64;
-  } else if cfg!(target_os = "windows") {
-    window_height = (monitor.size().height - 50) as f64;
   }
 
   window
