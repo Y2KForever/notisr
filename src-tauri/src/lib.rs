@@ -74,7 +74,8 @@ fn set_window_size(window: &WebviewWindow) {
   let window_height: f64;
   #[cfg(target_os = "windows")]
   {
-    window_height = (monitor.size().height - 32) as f64;
+    window_height = (monitor.size().height - 50) as f64; // Title bar is not included in height
+                                                         // so we have to take that into consideration
   }
   #[cfg(target_os = "macos")]
   {
