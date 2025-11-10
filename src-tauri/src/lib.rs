@@ -9,7 +9,6 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use dotenvy_macro::dotenv;
 use keyring_core::Result;
-use mac_notification_sys::{get_bundle_identifier_or_default, set_application};
 use reqwest::blocking::Client as BlockingClient;
 use rouille::{router, Response, Server};
 use serde::{Deserialize, Serialize};
@@ -22,8 +21,8 @@ use tauri::tray::{
   MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent,
 };
 use tauri::{
-  AppHandle, Emitter, LogicalPosition, Manager, PhysicalSize, RunEvent,
-  WebviewUrl, WebviewWindow, WindowEvent,
+  include_image, AppHandle, Emitter, LogicalPosition, Manager, PhysicalSize,
+  RunEvent, WebviewUrl, WebviewWindow, WindowEvent,
 };
 use tauri_plugin_notification::{NotificationExt, PermissionState};
 
@@ -33,6 +32,7 @@ use crate::command::{
   ServerCtl,
 };
 use crate::util::{check_validitiy_token, spawn_new_user};
+
 #[derive(Serialize, Deserialize, Debug)]
 struct UserInfo {
   user_id: String,
@@ -51,11 +51,14 @@ pub fn set_platform_default_store() -> Result<()> {
   Ok(())
 }
 
+#[cfg(target_os = "macos")]
+use mac_notification_sys::{get_bundle_identifier_or_default, set_application};
+
 #[cfg(target_os = "windows")]
 pub fn set_platform_default_store() -> Result<()> {
   #[cfg(not(debug_assertions))]
   {
-    let store = keyring::windows_native_keyring_store::Store::new()?;
+    let store = windows_native_keyring_store::Store::new()?;
     keyring_core::set_default_store(store);
   }
   Ok(())
@@ -292,27 +295,27 @@ pub fn run() {
       .unwrap();
 
       let mut tray_builder = TrayIconBuilder::new();
-
-      let bundle_name;
-
-      if cfg!(dev) {
-        bundle_name = "com.y2kforever.notisr";
-      } else {
-        bundle_name = "notisr";
-      }
-
-      let bundle = get_bundle_identifier_or_default(&bundle_name);
-
-      let _ = set_application(&bundle).unwrap();
+      let bundle_name = "com.y2kforever.notisr";
 
       #[cfg(target_os = "macos")]
       {
-        use tauri::include_image;
-
-        tray_builder =
-          tray_builder.icon(include_image!("./assets/notisr_icon_mac_tray.png"))
+        let bundle = get_bundle_identifier_or_default(&bundle_name);
+        let _ = set_application(&bundle).unwrap();
       }
 
+      #[cfg(target_os = "windows")]
+      {
+        use universal_notifications::Windows::register;
+
+        let app_name = "Notisr";
+        match register(bundle_name, app_name, None) {
+          Ok(_) => println!("App successfully registered."),
+          Err(e) => eprintln!("App failed to register: {}", e),
+        }
+      }
+
+      tray_builder =
+        tray_builder.icon(include_image!("./assets/notisr_icon_mac_tray.png"));
       let _ = tray_builder
         .on_menu_event(|app, event| match event.id.as_ref() {
           "show" => {
@@ -326,7 +329,7 @@ pub fn run() {
         })
         .menu(&menu)
         .show_menu_on_left_click(show_menu_on_left_click)
-        .on_tray_icon_event(|tray, event| match event {
+        .on_tray_icon_event(|_tray, event| match event {
           TrayIconEvent::Click {
             button: MouseButton::Left,
             button_state: MouseButtonState::Up,
