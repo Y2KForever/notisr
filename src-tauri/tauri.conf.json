@@ -20,7 +20,8 @@
   },
   "bundle": {
     "macOS": {
-      "entitlements": "entitlements.plist"
+      "entitlements": "Entitlements.plist",
+      "signingIdentity": "com.y2kforever.notisr"
     },
     "createUpdaterArtifacts": true,
     "active": true,

@@ -45,7 +45,7 @@ mod dev_store;
 pub fn set_platform_default_store() -> Result<()> {
   #[cfg(not(debug_assertions))]
   {
-    let store = apple_native_keyring_store::protected::Store::new()?;
+    let store = apple_native_keyring_store::keychain::Store::new()?;
     keyring_core::set_default_store(store);
   }
   Ok(())
@@ -103,7 +103,7 @@ fn set_window_position(window: &WebviewWindow) {
   let scale = window.scale_factor().unwrap_or(1.0);
   let window_size = window.inner_size().unwrap().width as f64 / scale;
 
-  let x = (monitor_size / scale) - (window_size / scale);
+  let x = (monitor_size / scale) - window_size;
   let y = 0.0;
 
   window.set_position(LogicalPosition { x: x, y: y }).unwrap();
