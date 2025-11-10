@@ -45,7 +45,7 @@ mod dev_store;
 pub fn set_platform_default_store() -> Result<()> {
   #[cfg(not(debug_assertions))]
   {
-    let store = apple_native_keyring_store::protected::Store::new()?;
+    let store = apple_native_keyring_store::keychain::Store::new()?;
     keyring_core::set_default_store(store);
   }
   Ok(())
@@ -74,10 +74,21 @@ fn set_window_size(window: &WebviewWindow) {
     }
   };
 
+  let window_height: f64;
+  #[cfg(target_os = "windows")]
+  {
+    window_height = (monitor.size().height - 50) as f64; // Title bar is not included in height
+                                                         // so we have to take that into consideration
+  }
+  #[cfg(target_os = "macos")]
+  {
+    window_height = monitor.size().height as f64;
+  }
+
   window
     .set_size(PhysicalSize {
       width: 250.0,
-      height: monitor.size().height as f64,
+      height: window_height,
     })
     .unwrap();
 }
@@ -91,8 +102,11 @@ fn set_window_position(window: &WebviewWindow) {
       panic!("Wtf no monitor?")
     }
   };
+  let monitor_size = monitor.size().width as f64;
+  let scale = window.scale_factor().unwrap_or(1.0);
+  let window_size = window.inner_size().unwrap().width as f64 / scale;
 
-  let x = ((monitor.size().width as f64) / monitor.scale_factor()) - 250.0; // Remove magic number
+  let x = (monitor_size / scale) - window_size;
   let y = 0.0;
 
   window.set_position(LogicalPosition { x: x, y: y }).unwrap();
